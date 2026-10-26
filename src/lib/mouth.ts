@@ -1,6 +1,15 @@
 /**
  * Mouth geometry, derived from MediaPipe FaceLandmarker's 468-point mesh.
  *
+ * Two independent, scale-invariant axes come out of this:
+ *
+ *   vertical   — how far the lips part, divided by face width. Drives pitch.
+ *   horizontal — how wide the opening is stretched, divided by face width.
+ *                Drives tone colour.
+ *
+ * Both are divided by the distance between the outer eye corners so leaning
+ * towards the camera changes nothing.
+ *
  * All indices below are the *inner* lip ring, which is what actually forms the
  * oval you see when a mouth opens (the outer ring is the visible lip border).
  */
@@ -11,6 +20,8 @@ export const UPPER_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308]
 export const LOWER_INNER = [324, 318, 402, 317, 14, 87, 178, 88, 95]
 /** Mouth corners: 61 = right corner, 291 = left corner. */
 export const CORNERS = [61, 291]
+/** Outer eye corners — the face-width ruler. */
+const EYE_CORNERS = [33, 263]
 
 /**
  * The closed ring around the opening: upper lip → right corner → lower lip →
@@ -25,16 +36,29 @@ const APERTURE_PAIRS: ReadonlyArray<readonly [number, number]> = [
   [312, 317],
 ]
 
-/** Aperture / mouth-width at rest (lips together). Calibrated on real faces. */
-const RATIO_CLOSED = 0.055
-/** Aperture / mouth-width for a fully open mouth. */
-const RATIO_OPEN = 0.52
+/** Aperture / face-width with the lips together. Calibrated on real faces. */
+const VERT_CLOSED = 0.006
+/** Aperture / face-width for a fully open mouth (a full yawn). */
+const VERT_OPEN = 0.3
+
+/** Mouth-width / face-width at rest, lips together. */
+const HORIZ_REST = 0.58
+/** Mouth-width / face-width of a broad stretched grin. */
+const HORIZ_WIDE = 0.9
+
+/** Aspect ratio of the opening at a round ":o". */
+const ASPECT_ROUND = 0.8
 
 export type MouthState = {
-  /** 0 = closed, 1 = wide open. */
+  /** 0 = closed, 1 = wide open. Vertical. */
   open: number
-  /** Raw aperture divided by mouth width. */
-  ratio: number
+  /** 0 = rest width, 1 = fully stretched sideways. Horizontal. */
+  wide: number
+  /** 1 = pursed and round (":o"), 0 = stretched flat ("—"). Aspect ratio. */
+  round: number
+  /** Raw measurements / face width, for tuning. */
+  vertical: number
+  horizontal: number
   /** Closed polygon tracing the inner lip ring, in video pixel space. */
   oval: Array<{ x: number; y: number }>
 }
@@ -54,6 +78,11 @@ export function readMouth(
   if (!points || points.length < 468) return null
 
   const px = (i: number) => ({ x: points[i].x * width, y: points[i].y * height })
+
+  const eyeA = px(EYE_CORNERS[0])
+  const eyeB = px(EYE_CORNERS[1])
+  const faceWidth = Math.hypot(eyeB.x - eyeA.x, eyeB.y - eyeA.y)
+  if (faceWidth < 1) return null
 
   const left = px(CORNERS[0])
   const right = px(CORNERS[1])
@@ -76,11 +105,16 @@ export function readMouth(
   }
   aperture /= APERTURE_PAIRS.length
 
-  const ratio = aperture / mouthWidth
-  const open = clamp((ratio - RATIO_CLOSED) / (RATIO_OPEN - RATIO_CLOSED))
+  const vertical = aperture / faceWidth
+  const horizontal = mouthWidth / faceWidth
+
+  const open = clamp((vertical - VERT_CLOSED) / (VERT_OPEN - VERT_CLOSED))
+  const wide = clamp((horizontal - HORIZ_REST) / (HORIZ_WIDE - HORIZ_REST))
+  // Aspect ratio of the opening, normalised by a typical round ":o".
+  const round = clamp(vertical / Math.max(horizontal, 1e-4) / ASPECT_ROUND)
 
   const oval = OVAL_RING.map(px)
-  return { open, ratio, oval }
+  return { open, wide, round, vertical, horizontal, oval }
 }
 
 /**
@@ -90,4 +124,9 @@ export function readMouth(
 export function smoothMouth(prev: number, next: number) {
   const alpha = next > prev ? 0.6 : 0.18
   return prev + (next - prev) * alpha
+}
+
+/** Gentler smoothing for the tone axes, which should not twitch. */
+export function smoothTone(prev: number, next: number) {
+  return prev + (next - prev) * 0.12
 }
