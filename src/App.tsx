@@ -287,22 +287,17 @@ export default function App() {
           <span>mouth ↔ wide</span>
           <span ref={hzRef}>silent</span>
         </div>
-        <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
           <div
             ref={wideBarRef}
             data-meter="wide"
             className="h-full w-0 rounded-full bg-violet-400 transition-[width] duration-75"
           />
-          <div
-            className="absolute top-0 h-full w-px bg-white/40"
-            style={{ left: gatePct }}
-            title={`sound starts past ${gatePct}`}
-          />
         </div>
 
         <div className="flex items-center justify-between text-xs text-paper/40 font-mono pt-1">
           <span>mouth ↕ open</span>
-          <span>→ brightness</span>
+          <span>→ volume</span>
         </div>
         <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/10">
           <div
@@ -331,9 +326,9 @@ export default function App() {
       </div>
 
       <p className="max-w-md text-center text-xs text-paper/35">
-        Stretching the mouth sideways sets the pitch. Opening it vertically brightens the tone; a
-        pursed &ldquo;:o&rdquo; darkens it. Eyes opened wide add echo. Nothing sings until the mouth
-        passes the marker.
+        Opening the mouth vertically sets the volume (and brightens the tone; a pursed
+        &ldquo;:o&rdquo; darkens it). Stretching it sideways sets the pitch. Eyes opened wide add
+        echo. Nothing sings until the open bar passes the marker.
       </p>
     </main>
   )

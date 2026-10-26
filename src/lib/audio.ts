@@ -17,7 +17,11 @@ import {
 
 /** How far the mouth must open before anything sounds. */
 export const GATE = 0.58
-const PEAK_GAIN = 0.5
+/** Level at the gate, and at a fully open mouth. */
+const LEVEL_MIN = 0.04
+const LEVEL_MAX = 0.62
+/** 1 = linear crescendo from the gate to a fully open mouth. */
+const LEVEL_CURVE = 1
 
 /** What the eye tracker hands the engine. */
 export type MouthReading = {
@@ -80,12 +84,22 @@ export class WaaawEngine {
     // A compressor sits after the level control: instrument trims can then be
     // matched for loudness without the peaks clipping the output.
     const comp = ctx.createDynamicsCompressor()
-    comp.threshold.value = -12
-    comp.knee.value = 12
-    comp.ratio.value = 4
+    comp.threshold.value = -6
+    comp.knee.value = 8
+    comp.ratio.value = 3
     comp.attack.value = 0.005
     comp.release.value = 0.15
-    comp.connect(ctx.destination)
+    // Final safety stage: tanh saturation, so a quiet mouth stays quiet and a
+    // wide one gets loud without ever clipping the output.
+    const limiter = ctx.createWaveShaper()
+    const curve = new Float32Array(1024)
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1
+      curve[i] = Math.tanh(x * 1.4) * 0.92
+    }
+    limiter.curve = curve
+    limiter.oversample = '2x'
+    comp.connect(limiter).connect(ctx.destination)
 
     const master = ctx.createGain()
     master.gain.value = 0
@@ -173,19 +187,17 @@ export class WaaawEngine {
   /**
    * The face-to-sound mapping lives here, and only here.
    *
-   *   horizontal stretch → pitch      (swapped: was vertical)
-   *   vertical opening  → brightness  (swapped: was horizontal)
+   *   vertical opening  → volume (and brightness)
+   *   horizontal stretch → pitch
    *   aspect ratio      → roundness   (darkens)
-   *   either mouth axis → loudness
    *   wide eyes         → echo
    *
-   * Loudness deliberately follows whichever mouth axis moved most, not the
-   * pitch axis: `wide` is 0 for a yawn, so gating on it would make yawning
-   * silent, and a yawn is the most waaaw a mouth can make.
+   * Loudness follows the vertical opening, which is also the gate: lips apart
+   * is what makes a waaaw, and stretching them is what tunes it.
    */
   setFace(mouth: MouthReading) {
     const ctx = this.ctx
-    const drive = Math.max(mouth.open, mouth.wide)
+    const drive = mouth.open
     const voiced = drive > GATE
     this.params = {
       pitch: mouth.wide,
@@ -207,7 +219,12 @@ export class WaaawEngine {
       master.gain.setTargetAtTime(0, t, release)
       return
     }
-    const level = (0.12 + PEAK_GAIN * Math.pow(drive, 0.85)) * (this.instrument.level ?? 1)
+    // Remap the usable range (gate → fully open) onto 0 → 1, so opening the
+    // mouth is an actual crescendo instead of a step to near-full volume.
+    const amount = Math.max(0, (drive - GATE) / (1 - GATE))
+    const level =
+      (LEVEL_MIN + (LEVEL_MAX - LEVEL_MIN) * Math.pow(amount, LEVEL_CURVE)) *
+      (this.instrument.level ?? 1)
     master.gain.setTargetAtTime(level, t, 0.02)
   }
 

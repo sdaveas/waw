@@ -89,15 +89,17 @@ a two-line change:
 
 | face | drives |
 | --- | --- |
+| `open` (vertical opening) | **volume**, and brightness — more open is brighter |
 | `wide` (horizontal stretch) | **pitch** |
-| `open` (vertical opening) | **brightness** — more open is brighter, `round` darkens |
 | `round` (aspect ratio) | darkens: lower F2, a sub-octave, a tighter buzz |
-| either mouth axis moving | loudness |
 | `eyes` (eyelid aperture) | **echo** — a feedback delay |
 
-Loudness follows whichever mouth axis moved most rather than the pitch axis on purpose: `wide` is
-0 for a yawn, so gating on it would make yawning silent, and a yawn is the most waaaw a mouth can
-make.
+Volume is likewise gated on `open`, so the two mouth axes stay independent: opening your mouth is
+a crescendo, stretching it is a pitch bend, and a grin (open 0.53, below the gate) stays silent
+while its width still reads.
+
+The level is remapped so the gate is near-silent and a fully open mouth is full volume — about
+11 dB of crescendo — and a tanh limiter closes the chain so louder never means clipping.
 
 ### Making the sound
 
@@ -111,8 +113,8 @@ Five voices in `src/lib/instruments.ts`, all built from Web Audio primitives:
 | **Kazoo** | saw through a tight buzzing bandpass, with heavy wobble |
 | **Guitar** | Karplus–Strong pluck: a noise burst in a damped delay line, strummed by the mouth and re-fretted while it rings |
 
-Audio only engages past **openness 0.58**. A teeth-showing grin measures 0.53 and stays silent on
-the mouth bars — though its width bar still moves, and wide eyes still echo.
+Audio only engages past **openness 0.58**. A teeth-showing grin measures 0.53 and stays silent —
+though its width bar still moves, and wide eyes still echo whatever is playing.
 
 The echo is tapped **after** the level gate, not from the voice. Voices oscillate even when they
 are silent, so feeding the raw voice into a feedback delay makes the repeats sustain forever
@@ -156,6 +158,14 @@ peaks clipping.
 
   | feed | mouth open | mouth wide | eyes | result |
   | --- | --- | --- | --- | --- |
-  | wide yawn | 100% | 0% | 0% | 92 Hz, no echo |
-  | teeth grin | 53% | 79% | 0% | 263 Hz, no echo |
-  | wide-eyed surprise | 61% | 12% | 73% | 125 Hz, echoing |
+  | wide yawn | 100% | 0% | 0% | full volume, 92 Hz, no echo |
+  | teeth grin | 53% | 79% | 0% | silent (below the gate) |
+  | wide-eyed surprise | 61% | 12% | 73% | just audible, 125 Hz, echoing |
+
+- Volume rendered through the real engine against mouth opening, at a fixed pitch:
+
+  | mouth open | 0.55 | 0.62 | 0.70 | 0.80 | 0.90 | 1.00 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | rms | 0 | 0.106 | 0.205 | 0.270 | 0.329 | 0.372 |
+
+  Pitch stayed at 207 Hz across that whole sweep, and peak stayed at or below 0.82.
