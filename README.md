@@ -109,8 +109,7 @@ a two-line change:
 | `eyes` (eyelid aperture) | **echo** — a feedback delay |
 
 Volume is likewise gated on `open`, so the two mouth axes stay independent: opening your mouth is
-a crescendo, stretching it is a pitch bend, and a grin (open 0.53, below the gate) stays silent
-while its width still reads.
+a crescendo and stretching it is a pitch bend.
 
 The level is remapped so the gate is near-silent and a fully open mouth is full volume — about
 11 dB of crescendo — and a tanh limiter closes the chain so louder never means clipping.
@@ -127,8 +126,8 @@ Five voices in `src/lib/instruments.ts`, all built from Web Audio primitives:
 | **Kazoo** | saw through a tight buzzing bandpass, with heavy wobble |
 | **Guitar** | Karplus–Strong pluck: a noise burst in a damped delay line, strummed by the mouth and re-fretted while it rings |
 
-Audio only engages past **openness 0.58**. A teeth-showing grin measures 0.53 and stays silent —
-though its width bar still moves, and wide eyes still echo whatever is playing.
+Audio engages from **openness 0.22** — a slight parting is enough to sing. A resting face still
+measures 0.00, so a closed mouth stays properly silent.
 
 The echo is tapped **after** the level gate, not from the voice. Voices oscillate even when they
 are silent, so feeding the raw voice into a feedback delay makes the repeats sustain forever
@@ -173,13 +172,15 @@ peaks clipping.
   | feed | mouth open | mouth wide | eyes | result |
   | --- | --- | --- | --- | --- |
   | wide yawn | 100% | 0% | 0% | full volume, 92 Hz, no echo |
-  | teeth grin | 53% | 79% | 0% | silent (below the gate) |
+  | teeth grin | 53% | 79% | 0% | clear, 262 Hz |
   | wide-eyed surprise | 61% | 12% | 73% | just audible, 125 Hz, echoing |
 
 - Volume rendered through the real engine against mouth opening, at a fixed pitch:
 
-  | mouth open | 0.55 | 0.62 | 0.70 | 0.80 | 0.90 | 1.00 |
-  | --- | --- | --- | --- | --- | --- | --- |
-  | rms | 0 | 0.106 | 0.205 | 0.270 | 0.329 | 0.372 |
+  | mouth open | 0.18 | 0.22 | 0.25 | 0.30 | 0.40 | 0.70 | 1.00 |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | rms | 0 | 0 | 0.142 | 0.184 | 0.213 | 0.360 | 0.372 |
 
-  Pitch stayed at 207 Hz across that whole sweep, and peak stayed at or below 0.82.
+  Pitch stayed at 207 Hz across that whole sweep, and peak stayed at or below 0.82. The gate is
+  deliberately low so a slight parting sings; the early volume curve means it is audible straight
+  away, and the remaining range is about 8 dB up to a fully open mouth.

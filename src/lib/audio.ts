@@ -15,13 +15,19 @@ import {
   type Voice,
 } from './instruments'
 
-/** How far the mouth must open before anything sounds. */
-export const GATE = 0.58
+/**
+ * How far the mouth must open before anything sounds. Low enough that a slight
+ * parting sings; a resting face still measures 0.00, so silence is preserved.
+ */
+export const GATE = 0.22
 /** Level at the gate, and at a fully open mouth. */
 const LEVEL_MIN = 0.04
 const LEVEL_MAX = 0.62
-/** 1 = linear crescendo from the gate to a fully open mouth. */
-const LEVEL_CURVE = 1
+/**
+ * Below 1 the crescendo comes in early: just past the gate the volume is
+ * already clearly audible, then it flattens towards full.
+ */
+const LEVEL_CURVE = 0.7
 
 /** What the eye tracker hands the engine. */
 export type MouthReading = {
