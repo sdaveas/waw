@@ -20,6 +20,15 @@ import {
  * parting sings; a resting face still measures 0.00, so silence is preserved.
  */
 export const GATE = 0.22
+/** Wah fully open, i.e. effectively bypassed when no hand is in frame. */
+const WAH_OPEN_HZ = 18000
+/** Bottom of the sweep, and octaves spanned up to fully open. */
+const WAH_LOW_HZ = 250
+const WAH_OCTAVES = 5
+/** Resonance range: clean to squelchy. */
+const SQUELCH_MIN = 0.7
+const SQUELCH_MAX = 11
+
 /** Level at the gate, and at a fully open mouth. */
 const LEVEL_MIN = 0.04
 const LEVEL_MAX = 0.62
@@ -46,6 +55,7 @@ export class WaaawEngine {
   private params: VoiceParams = { pitch: 0, bright: 0, round: 0, drive: 0, voiced: false }
   private spawnToken = 0
   private echo = 0
+  private wah: BiquadFilterNode | null = null
   private fxWet: GainNode | null = null
   private fxFeedback: GainNode | null = null
   private fxDamp: BiquadFilterNode | null = null
@@ -112,6 +122,16 @@ export class WaaawEngine {
     master.connect(comp)
     this.master = master
 
+    // Wah pedal: a resonant lowpass the hands sweep, in series between the
+    // voice and the level gate. In series matters — a parallel path would
+    // leak the unfiltered voice past the wah and dilute it.
+    const wah = ctx.createBiquadFilter()
+    wah.type = 'lowpass'
+    wah.frequency.value = WAH_OPEN_HZ
+    wah.Q.value = 0.7
+    wah.connect(master)
+    this.wah = wah
+
     // Echo bus: voices feed a send, the delay repeats into the compressor.
     const delay = ctx.createDelay(2)
     delay.delayTime.value = 0.26
@@ -149,7 +169,7 @@ export class WaaawEngine {
 
     const gain = ctx.createGain()
     gain.gain.value = 0
-    gain.connect(master)
+    gain.connect(this.wah ?? master)
 
     const voice = this.instrument.create(ctx, gain)
     voice.setParams(this.params)
@@ -235,6 +255,30 @@ export class WaaawEngine {
   }
 
   /**
+   * Hands are the wah pedal: height sweeps the cutoff, the second hand sets the
+   * resonance. With no hand in frame the filter parks wide open and flat, so
+   * the app sounds exactly as it did before hands existed.
+   */
+  setHands(wah: number, squelch: number, present: boolean) {
+    const ctx = this.ctx
+    if (!ctx || !this.wah) return
+    const t = ctx.currentTime
+    if (!present) {
+      this.wah.frequency.setTargetAtTime(WAH_OPEN_HZ, t, 0.1)
+      this.wah.Q.setTargetAtTime(SQUELCH_MIN, t, 0.1)
+      return
+    }
+    const hz = WAH_LOW_HZ * Math.pow(2, WAH_OCTAVES * Math.min(1, Math.max(0, wah)))
+    this.wah.frequency.setTargetAtTime(hz, t, 0.05)
+    this.wah.Q.setTargetAtTime(SQUELCH_MIN + (SQUELCH_MAX - SQUELCH_MIN) * squelch, t, 0.08)
+  }
+
+  /** Cutoff in Hz, for the display. */
+  get wahHz() {
+    return this.wah?.frequency.value ?? 0
+  }
+
+  /**
    * Wide eyes push the voice into a feedback delay. The wet path bypasses the
    * level gate, so closing your mouth lets the repeats ring out instead of
    * chopping them off.
@@ -274,6 +318,7 @@ export class WaaawEngine {
     this.fxWet = null
     this.fxFeedback = null
     this.fxDamp = null
+    this.wah = null
     if (this.offline) return
     try {
       await ctx.close()

@@ -3,8 +3,8 @@
 **[sdaveas.github.io/waw](https://sdaveas.github.io/waw/)** — needs a camera, so it wants a
 laptop or phone browser rather than a curl.
 
-Open your mouth at the camera, hear a **waaaaw**. The wider you stretch your lips the higher it
-sings; the more you open them the brighter it gets; open your eyes wide and it echoes.
+Open your mouth at the camera, hear a **waaaaw**. Open your mouth to get loud, stretch it sideways
+to raise the pitch, open your eyes wide for echo, and raise a hand to sweep a wah pedal.
 
 Everything runs in the browser. No frames, no audio, no face data ever leave the machine.
 
@@ -46,11 +46,19 @@ camera → <video>
    │      ├─ aspect ratio       → round 0..1
    │      └─ eyelid aperture    → eyes  0..1
    │
+   ├─ HandLandmarker (MediaPipe, VIDEO mode, 2 hands, every 2nd frame)
+   │      └─ 21 points per hand → src/lib/hands.ts
+   │             ├─ palm height      → wah cutoff
+   │             └─ second hand      → wah resonance
+   │
    ├─ smoothing      fast attack / slow release on the mouth, gentle on tone
    │
-   └─ WaaawEngine.setFace({ open, wide, round, eyes })   src/lib/audio.ts
-          ├─ instrument voice → master gate ─┬─→ compressor → speakers
-          └─ wide eyes ─→ feedback delay ────┘
+   └─ WaaawEngine   src/lib/audio.ts
+          setFace({ open, wide, round, eyes })
+          setHands(wah, squelch, present)
+             │
+             ├─ voice → wah filter → level gate ─┬─→ compressor → limiter → speakers
+             └─ wide eyes ─→ feedback delay ─────┘
 ```
 
 ### Detecting the mouth
@@ -107,12 +115,32 @@ a two-line change:
 | `wide` (horizontal stretch) | **pitch** |
 | `round` (aspect ratio) | darkens: lower F2, a sub-octave, a tighter buzz |
 | `eyes` (eyelid aperture) | **echo** — a feedback delay |
+| hand height | **wah** — sweeps a resonant lowpass from 250 Hz to 8 kHz |
+| second hand height | **squelch** — the wah's resonance, Q 0.7 to 11 |
 
 Volume is likewise gated on `open`, so the two mouth axes stay independent: opening your mouth is
 a crescendo and stretching it is a pitch bend.
 
 The level is remapped so the gate is near-silent and a fully open mouth is full volume — about
 11 dB of crescendo — and a tanh limiter closes the chain so louder never means clipping.
+
+### Detecting the hands
+
+Each hand's palm centre is the average of the wrist and the four knuckles, so curling fingers does
+not move the wah. Height is normalised between the bottom and top of the frame, then squared off
+against the control range.
+
+Two details that the model's own output does not get right:
+
+- **Confidence is not a good way to pick the hand.** In testing, a pair of crossed arms in the
+  background scored 0.98 while the actual hand scored 0.83. Size works: the wrist-to-knuckle
+  distance separates a hand in front of the camera (152 px) from a background false positive
+  (45 px). The biggest hand drives the wah; anything under 3.5% of the frame width is ignored.
+- **Handedness is not used for the roles.** MediaPipe derives it from a mirrored image, so it
+  flips with the camera. "Closest hand sweeps, other hand squelches" is unambiguous.
+
+The hand model runs on every second frame. Running both models on every frame cost more than
+half the frame rate for no benefit, since the wah is smoothed anyway.
 
 ### Making the sound
 
@@ -146,6 +174,9 @@ peaks clipping.
 | when sound starts | `GATE` in `src/lib/audio.ts` |
 | which axis controls what | `setFace()` in `src/lib/audio.ts` |
 | echo time, depth, feedback | `setEcho()` in `src/lib/audio.ts` |
+| wah sweep range, squelch range | `WAH_LOW_HZ`, `WAH_OCTAVES`, `SQUELCH_*` in `src/lib/audio.ts` |
+| which hand wins, how big a hand must be | `MIN_SIZE_RATIO` in `src/lib/hands.ts` |
+| hand update rate | `HANDS_EVERY` in `src/App.tsx` |
 | pitch range, timbre mapping | each voice in `src/lib/instruments.ts` |
 | relative loudness | `level` on each entry in `INSTRUMENTS` |
 | how long a note rings after you close | `releaseMs` (used by the guitar) |
@@ -174,6 +205,21 @@ peaks clipping.
   | wide yawn | 100% | 0% | 0% | full volume, 92 Hz, no echo |
   | teeth grin | 53% | 79% | 0% | clear, 262 Hz |
   | wide-eyed surprise | 61% | 12% | 73% | just audible, 125 Hz, echoing |
+
+- Wah rendered through the real engine with a fixed mouth, hand sweeping the filter:
+
+  | hand | low | mid | high | no hands |
+  | --- | --- | --- | --- | --- |
+  | cutoff | 297 Hz | 1414 Hz | 6727 Hz | bypassed |
+  | spectral centroid | 545 Hz | 1230 Hz | 2179 Hz | 2228 Hz |
+
+  A raised hand opens the tone to essentially the un-filtered sound, and the second hand's height
+  moves Q from 0.7 to 11.
+- Hand tracking verified end-to-end on a synthetic camera feed with a real hand composited into
+  the frame: hand low → 250 Hz (dark), hand raised → 2.6 kHz (bright).
+- Frame rate with both models, software-rendered headless Chromium: 60 fps face-only, 31 fps with
+  hands on every second frame. Real hardware with the GPU delegate is faster, but the 2× cost of
+  the second model is real.
 
 - Volume rendered through the real engine against mouth opening, at a fixed pitch:
 

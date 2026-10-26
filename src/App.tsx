@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { FaceLandmarker } from '@mediapipe/tasks-vision'
+import type { FaceLandmarker, HandLandmarker } from '@mediapipe/tasks-vision'
 import { GATE, WaaawEngine } from './lib/audio'
 import { INSTRUMENTS, DEFAULT_INSTRUMENT } from './lib/instruments'
 import { readFace, smoothMouth, smoothTone } from './lib/face'
-import { getLandmarker } from './lib/tracker'
+import { HAND_CONNECTIONS, readHands, smoothHand, type HandState } from './lib/hands'
+import { getHandLandmarker, getLandmarker } from './lib/tracker'
 
 type Status = 'idle' | 'loading' | 'running' | 'error'
 
 const ZERO = { open: 0, wide: 0, round: 0, eyes: 0 }
+
+/**
+ * The hand model is roughly as expensive as the face model, and running both
+ * every frame halved the frame rate. The wah is smoothed anyway, so hands run
+ * on every other frame and the last result is reused in between.
+ */
+const HANDS_EVERY = 2
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -15,15 +23,22 @@ export default function App() {
   const openBarRef = useRef<HTMLDivElement | null>(null)
   const wideBarRef = useRef<HTMLDivElement | null>(null)
   const eyeBarRef = useRef<HTMLDivElement | null>(null)
+  const wahBarRef = useRef<HTMLDivElement | null>(null)
   const hzRef = useRef<HTMLSpanElement | null>(null)
+  const wahRef = useRef<HTMLSpanElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const landmarkerRef = useRef<FaceLandmarker | null>(null)
+  const handLandmarkerRef = useRef<HandLandmarker | null>(null)
   const engineRef = useRef<WaaawEngine | null>(null)
   const rafRef = useRef<number | null>(null)
   const openRef = useRef(0)
   const wideRef = useRef(0)
   const roundRef = useRef(0)
   const eyesRef = useRef(0)
+  const wahRefValue = useRef(0)
+  const squelchRef = useRef(0)
+  const frameCountRef = useRef(0)
+  const lastHandsRef = useRef<HandState | null>(null)
   const mutedRef = useRef(false)
   const lastTsRef = useRef(0)
 
@@ -43,6 +58,8 @@ export default function App() {
     wideRef.current = 0
     roundRef.current = 0
     eyesRef.current = 0
+    wahRefValue.current = 0
+    squelchRef.current = 0
   }, [])
 
   useEffect(() => teardown, [teardown])
@@ -62,14 +79,16 @@ export default function App() {
     setError(null)
     setStatus('loading')
     try {
-      const [landmarker, stream] = await Promise.all([
+      const [landmarker, handLandmarker, stream] = await Promise.all([
         getLandmarker(),
+        getHandLandmarker(),
         navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 720 } },
           audio: false,
         }),
       ])
       landmarkerRef.current = landmarker
+      handLandmarkerRef.current = handLandmarker
       streamRef.current = stream
 
       const video = videoRef.current
@@ -119,6 +138,7 @@ export default function App() {
     lastTsRef.current = ts
 
     let face = null
+    let handState = null
     try {
       const result = landmarker.detectForVideo(video, ts)
       const landmarks = result.faceLandmarks?.[0]
@@ -126,6 +146,22 @@ export default function App() {
     } catch {
       /* a dropped frame is not fatal */
     }
+
+    frameCountRef.current++
+    if (handLandmarkerRef.current && frameCountRef.current % HANDS_EVERY === 0) {
+      try {
+        const hands = handLandmarkerRef.current.detectForVideo(video, ts)
+        lastHandsRef.current = readHands(
+          hands.landmarks ?? [],
+          hands.handedness ?? [],
+          video.videoWidth,
+          video.videoHeight,
+        )
+      } catch {
+        /* hands are optional; a dropped frame is not fatal */
+      }
+    }
+    handState = lastHandsRef.current
 
     const open = smoothMouth(openRef.current, face?.open ?? 0)
     const wide = smoothTone(wideRef.current, face?.wide ?? 0)
@@ -136,8 +172,14 @@ export default function App() {
     roundRef.current = round
     eyesRef.current = eyes
 
+    const wah = smoothHand(wahRefValue.current, handState?.wah ?? 0)
+    const squelch = smoothHand(squelchRef.current, handState?.squelch ?? 0)
+    wahRefValue.current = wah
+    squelchRef.current = squelch
+
     const engine = engineRef.current
     engine?.setFace(mutedRef.current ? ZERO : { open, wide, round, eyes })
+    engine?.setHands(wah, squelch, Boolean(handState?.present))
 
     // --- paint ---
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -184,12 +226,46 @@ export default function App() {
       ctx.restore()
     }
 
+    if (handState?.present) {
+      const scale = canvas.width / 960
+      ctx.save()
+      ctx.strokeStyle = 'rgba(52 211 153 / 0.75)'
+      ctx.fillStyle = 'rgba(52 211 153 / 0.9)'
+      ctx.shadowColor = 'rgba(52 211 153 / 0.8)'
+      ctx.shadowBlur = 8 + 22 * wah
+      ctx.lineWidth = Math.max(1, 2 * scale)
+      for (const hand of handState.hands) {
+        for (const [a, b] of HAND_CONNECTIONS) {
+          ctx.beginPath()
+          ctx.moveTo(hand.points[a].x, hand.points[a].y)
+          ctx.lineTo(hand.points[b].x, hand.points[b].y)
+          ctx.stroke()
+        }
+        ctx.beginPath()
+        ctx.arc(hand.palm.x, hand.palm.y, Math.max(3, 5 * scale), 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.restore()
+    }
+
     if (openBarRef.current) openBarRef.current.style.width = `${Math.round(open * 100)}%`
     if (wideBarRef.current) wideBarRef.current.style.width = `${Math.round(wide * 100)}%`
     if (eyeBarRef.current) eyeBarRef.current.style.width = `${Math.round(eyes * 100)}%`
     if (hzRef.current) {
       hzRef.current.textContent =
         engine && engine.voiced && !mutedRef.current ? `${Math.round(engine.hz)} Hz` : 'silent'
+    }
+    if (wahBarRef.current) {
+      wahBarRef.current.style.width = `${Math.round(handState?.present ? wah * 100 : 0)}%`
+    }
+    if (wahRef.current) {
+      if (!handState?.present) {
+        wahRef.current.textContent = 'no hands'
+      } else {
+        const hz = engine?.wahHz ?? 0
+        const shown = hz >= 1000 ? `${(hz / 1000).toFixed(1)} kHz` : `${Math.round(hz)} Hz`
+        wahRef.current.textContent = `${shown} · Q ${(0.7 + 10.3 * squelch).toFixed(1)}`
+      }
     }
   }
 
@@ -323,12 +399,25 @@ export default function App() {
             className="h-full w-0 rounded-full bg-amber-400 transition-[width] duration-75"
           />
         </div>
+
+        <div className="flex items-center justify-between text-xs text-paper/40 font-mono pt-1">
+          <span>hands ↕ raised</span>
+          <span ref={wahRef}>no hands</span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+          <div
+            ref={wahBarRef}
+            data-meter="wah"
+            className="h-full w-0 rounded-full bg-emerald-400 transition-[width] duration-75"
+          />
+        </div>
       </div>
 
       <p className="max-w-md text-center text-xs text-paper/35">
         Opening the mouth vertically sets the volume (and brightens the tone; a pursed
         &ldquo;:o&rdquo; darkens it). Stretching it sideways sets the pitch. Eyes opened wide add
-        echo. Nothing sings until the open bar passes the marker.
+        echo. Raise a hand to sweep the wah, and a second hand sets the squelch. Nothing sings until
+        the open bar passes the marker.
       </p>
     </main>
   )
