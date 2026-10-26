@@ -26,3 +26,6 @@ dist-ssr
 # MediaPipe binaries — recreated by `npm run setup`
 public/models/
 public/wasm/
+
+# local test fixtures (composites used for camera-feed tests)
+public/_t_*
