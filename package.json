@@ -7,9 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "setup": "bash scripts/setup-assets.sh",
+    "postinstall": "bash scripts/setup-assets.sh"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.1.1",
     "@tailwindcss/vite": "^4.3.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# MediaPipe binaries — recreated by `npm run setup`
+public/models/
+public/wasm/
