@@ -1,5 +1,8 @@
 # waw
 
+**[sdaveas.github.io/waw](https://sdaveas.github.io/waw/)** — needs a camera, so it wants a
+laptop or phone browser rather than a curl.
+
 Open your mouth at the camera, hear a **waaaaw**. The wider you stretch your lips the higher it
 sings; the more you open them the brighter it gets; open your eyes wide and it echoes.
 
@@ -15,7 +18,18 @@ npm run dev
 Open the printed URL, click **Enable camera & sound**, and open your mouth.
 
 `npm run setup` re-downloads the MediaPipe model and copies the wasm runtime into `public/` if you
-ever delete them — both are gitignored (about 29 MB of binaries).
+ever delete them — both are gitignored (about 29 MB of binaries). It also runs on `npm install`,
+so a fresh clone is ready to build with no extra steps.
+
+## Deploying
+
+Pushing to `main` deploys to GitHub Pages via `.github/workflows/deploy.yml`: `npm ci` (which runs
+the asset fetch), `npm run build`, then `actions/deploy-pages`.
+
+The only wrinkle is the sub-path — Pages serves project sites from `/<repo>/`, so the production
+build sets `base: '/waw/'` and the model and wasm paths are resolved against
+`import.meta.env.BASE_URL` rather than assumed to be at the site root. `npm run dev` still serves
+from `/`.
 
 ## How it works
 
