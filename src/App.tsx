@@ -2,16 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FaceLandmarker } from '@mediapipe/tasks-vision'
 import { GATE, WaaawEngine } from './lib/audio'
 import { INSTRUMENTS, DEFAULT_INSTRUMENT } from './lib/instruments'
-import { readMouth, smoothMouth, smoothTone } from './lib/mouth'
+import { readFace, smoothMouth, smoothTone } from './lib/face'
 import { getLandmarker } from './lib/tracker'
 
 type Status = 'idle' | 'loading' | 'running' | 'error'
 
+const ZERO = { open: 0, wide: 0, round: 0, eyes: 0 }
+
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const heightBarRef = useRef<HTMLDivElement | null>(null)
-  const widthBarRef = useRef<HTMLDivElement | null>(null)
+  const openBarRef = useRef<HTMLDivElement | null>(null)
+  const wideBarRef = useRef<HTMLDivElement | null>(null)
+  const eyeBarRef = useRef<HTMLDivElement | null>(null)
   const hzRef = useRef<HTMLSpanElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const landmarkerRef = useRef<FaceLandmarker | null>(null)
@@ -20,6 +23,7 @@ export default function App() {
   const openRef = useRef(0)
   const wideRef = useRef(0)
   const roundRef = useRef(0)
+  const eyesRef = useRef(0)
   const mutedRef = useRef(false)
   const lastTsRef = useRef(0)
 
@@ -38,6 +42,7 @@ export default function App() {
     openRef.current = 0
     wideRef.current = 0
     roundRef.current = 0
+    eyesRef.current = 0
   }, [])
 
   useEffect(() => teardown, [teardown])
@@ -45,9 +50,7 @@ export default function App() {
   const toggleMute = () => {
     mutedRef.current = !mutedRef.current
     setMuted(mutedRef.current)
-    if (mutedRef.current) {
-      engineRef.current?.setMouth(0, 0, 0)
-    }
+    if (mutedRef.current) engineRef.current?.setFace(ZERO)
   }
 
   const pickInstrument = (id: string) => {
@@ -115,80 +118,78 @@ export default function App() {
     const ts = Math.max(now, lastTsRef.current + 1)
     lastTsRef.current = ts
 
-    let targetOpen = 0
-    let targetWide = 0
-    let targetRound = 0
-    let mouth = null
+    let face = null
     try {
       const result = landmarker.detectForVideo(video, ts)
-      const face = result.faceLandmarks?.[0]
-      if (face) {
-        mouth = readMouth(face, video.videoWidth, video.videoHeight)
-        if (mouth) {
-          targetOpen = mouth.open
-          targetWide = mouth.wide
-          targetRound = mouth.round
-        }
-      }
+      const landmarks = result.faceLandmarks?.[0]
+      if (landmarks) face = readFace(landmarks, video.videoWidth, video.videoHeight)
     } catch {
       /* a dropped frame is not fatal */
     }
 
-    const open = smoothMouth(openRef.current, targetOpen)
-    const wide = smoothTone(wideRef.current, targetWide)
-    const round = smoothTone(roundRef.current, targetRound)
+    const open = smoothMouth(openRef.current, face?.open ?? 0)
+    const wide = smoothTone(wideRef.current, face?.wide ?? 0)
+    const round = smoothTone(roundRef.current, face?.round ?? 0)
+    const eyes = smoothTone(eyesRef.current, face?.eyes ?? 0)
     openRef.current = open
     wideRef.current = wide
     roundRef.current = round
+    eyesRef.current = eyes
 
     const engine = engineRef.current
-    engine?.setMouth(mutedRef.current ? 0 : open, wide, round)
+    engine?.setFace(mutedRef.current ? ZERO : { open, wide, round, eyes })
 
     // --- paint ---
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    if (mouth) {
-      const stroke = '#38bdf8'
+    if (face) {
       const scale = canvas.width / 960
-      const pts = mouth.oval
+      ctx.save()
 
-      // Smooth closed curve through the inner lip ring (midpoint smoothing).
-      const path = new Path2D()
+      // Eyes: the echo control, so they glow as they widen.
+      const eyeAlpha = 0.18 + 0.65 * eyes
+      ctx.strokeStyle = `rgba(251 191 36 / ${eyeAlpha})`
+      ctx.shadowColor = 'rgba(251 191 36 / 0.8)'
+      ctx.shadowBlur = 6 + 26 * eyes
+      ctx.lineWidth = Math.max(1, (1 + 2.5 * eyes) * scale)
+      for (const ring of face.eyeOvals) {
+        const path = new Path2D()
+        ring.forEach((p, i) => (i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y)))
+        path.closePath()
+        ctx.stroke(path)
+      }
+
+      // Mouth: smoothed closed curve through the inner lip ring.
+      const pts = face.oval
+      const mouthPath = new Path2D()
       const mid = (a: number, b: number) => ({
         x: (pts[a].x + pts[b].x) / 2,
         y: (pts[a].y + pts[b].y) / 2,
       })
       const startPt = mid(pts.length - 1, 0)
-      path.moveTo(startPt.x, startPt.y)
+      mouthPath.moveTo(startPt.x, startPt.y)
       for (let i = 0; i < pts.length; i++) {
         const next = mid(i, (i + 1) % pts.length)
-        path.quadraticCurveTo(pts[i].x, pts[i].y, next.x, next.y)
+        mouthPath.quadraticCurveTo(pts[i].x, pts[i].y, next.x, next.y)
       }
-      path.closePath()
+      mouthPath.closePath()
 
-      ctx.save()
-      ctx.fillStyle = `rgba(56 189 248 / ${0.08 + 0.2 * open})`
-      ctx.fill(path)
-      ctx.shadowColor = stroke
+      ctx.shadowColor = '#38bdf8'
       ctx.shadowBlur = 14 + 34 * open
-      ctx.strokeStyle = stroke
+      ctx.fillStyle = `rgba(56 189 248 / ${0.08 + 0.2 * open})`
+      ctx.fill(mouthPath)
+      ctx.strokeStyle = '#38bdf8'
       ctx.lineWidth = Math.max(2, (2 + 4 * open) * scale)
-      ctx.stroke(path)
+      ctx.stroke(mouthPath)
       ctx.restore()
-
-      // A tick on the height bar showing where the sound switches on, and a
-      // soft dot on the width bar showing the stretch.
-      if (widthBarRef.current) {
-        widthBarRef.current.style.width = `${Math.round(wide * 100)}%`
-      }
     }
 
-    if (heightBarRef.current) {
-      heightBarRef.current.style.width = `${Math.round(open * 100)}%`
-    }
+    if (openBarRef.current) openBarRef.current.style.width = `${Math.round(open * 100)}%`
+    if (wideBarRef.current) wideBarRef.current.style.width = `${Math.round(wide * 100)}%`
+    if (eyeBarRef.current) eyeBarRef.current.style.width = `${Math.round(eyes * 100)}%`
     if (hzRef.current) {
-      const voiced = open > GATE && !mutedRef.current
-      hzRef.current.textContent = voiced && engine ? `${Math.round(engine.hz)} Hz` : 'silent'
+      hzRef.current.textContent =
+        engine && engine.voiced && !mutedRef.current ? `${Math.round(engine.hz)} Hz` : 'silent'
     }
   }
 
@@ -243,7 +244,7 @@ export default function App() {
             {status === 'idle' && (
               <>
                 <p className="text-sm text-paper/60 max-w-sm">
-                  Needs camera access to find your mouth and sound output to sing. Nothing leaves
+                  Needs camera access to find your face and sound output to sing. Nothing leaves
                   your device.
                 </p>
                 <button
@@ -283,37 +284,56 @@ export default function App() {
 
       <div className="w-full max-w-2xl space-y-2">
         <div className="flex items-center justify-between text-xs text-paper/40 font-mono">
-          <span>mouth ↕ open</span>
+          <span>mouth ↔ wide</span>
           <span ref={hzRef}>silent</span>
         </div>
         <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/10">
           <div
-            ref={heightBarRef}
-            className="h-full w-0 rounded-full bg-sky-400 transition-[width] duration-75"
+            ref={wideBarRef}
+            data-meter="wide"
+            className="h-full w-0 rounded-full bg-violet-400 transition-[width] duration-75"
           />
-          {/* where the sound switches on */}
           <div
             className="absolute top-0 h-full w-px bg-white/40"
             style={{ left: gatePct }}
-            title={`sound starts past ${gatePct} open`}
+            title={`sound starts past ${gatePct}`}
           />
         </div>
 
         <div className="flex items-center justify-between text-xs text-paper/40 font-mono pt-1">
-          <span>mouth ↔ wide</span>
-          <span>brightness</span>
+          <span>mouth ↕ open</span>
+          <span>→ brightness</span>
+        </div>
+        <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+          <div
+            ref={openBarRef}
+            data-meter="open"
+            className="h-full w-0 rounded-full bg-sky-400 transition-[width] duration-75"
+          />
+          <div
+            className="absolute top-0 h-full w-px bg-white/40"
+            style={{ left: gatePct }}
+            title={`sound starts past ${gatePct}`}
+          />
+        </div>
+
+        <div className="flex items-center justify-between text-xs text-paper/40 font-mono pt-1">
+          <span>eyes ↔ wide</span>
+          <span>→ echo</span>
         </div>
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
           <div
-            ref={widthBarRef}
-            className="h-full w-0 rounded-full bg-violet-400 transition-[width] duration-75"
+            ref={eyeBarRef}
+            data-meter="eyes"
+            className="h-full w-0 rounded-full bg-amber-400 transition-[width] duration-75"
           />
         </div>
       </div>
 
       <p className="max-w-md text-center text-xs text-paper/35">
-        Vertical opening sets the pitch. Stretching the mouth sideways brightens it; a round
-        &ldquo;:o&rdquo; darkens it. Nothing sings until the mouth passes the marker.
+        Stretching the mouth sideways sets the pitch. Opening it vertically brightens the tone; a
+        pursed &ldquo;:o&rdquo; darkens it. Eyes opened wide add echo. Nothing sings until the mouth
+        passes the marker.
       </p>
     </main>
   )

@@ -11,13 +11,21 @@ import {
   DEFAULT_INSTRUMENT,
   getInstrument,
   type Instrument,
-  type MouthParams,
+  type VoiceParams,
   type Voice,
 } from './instruments'
 
-/** Openness below this stays silent — a grin is not a waaaw. */
+/** How far the mouth must open before anything sounds. */
 export const GATE = 0.58
 const PEAK_GAIN = 0.5
+
+/** What the eye tracker hands the engine. */
+export type MouthReading = {
+  open: number
+  wide: number
+  round: number
+  eyes: number
+}
 
 export class WaaawEngine {
   private ctx: AudioContext | null = null
@@ -25,12 +33,25 @@ export class WaaawEngine {
   private voiceGain: GainNode | null = null
   private voice: Voice | null = null
   private instrument: Instrument
-  private params: MouthParams = { open: 0, wide: 0, round: 0, voiced: false }
+  private params: VoiceParams = { pitch: 0, bright: 0, round: 0, drive: 0, voiced: false }
   private spawnToken = 0
+  private echo = 0
+  private fxWet: GainNode | null = null
+  private fxFeedback: GainNode | null = null
+  private fxDamp: BiquadFilterNode | null = null
+  private offline = false
 
-  constructor(instrumentId: string = DEFAULT_INSTRUMENT) {
+  /**
+   * @param instrumentId which voice to load
+   * @param injectedCtx  test seam: pass an OfflineAudioContext to render the
+   *                     real graph headlessly. Production omits it.
+   */
+  constructor(instrumentId: string = DEFAULT_INSTRUMENT, injectedCtx?: AudioContext) {
     this.instrument = getInstrument(instrumentId)
+    this.injected = injectedCtx
   }
+
+  private injected?: AudioContext
 
   get instrumentId() {
     return this.instrument.id
@@ -51,7 +72,9 @@ export class WaaawEngine {
     const AudioCtor =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    const ctx = new AudioCtor()
+    const ctx = this.injected ?? new AudioCtor()
+    // An offline context renders on a clock we do not drive.
+    this.offline = typeof (ctx as unknown as { startRendering?: unknown }).startRendering === 'function'
     this.ctx = ctx
 
     // A compressor sits after the level control: instrument trims can then be
@@ -69,8 +92,34 @@ export class WaaawEngine {
     master.connect(comp)
     this.master = master
 
+    // Echo bus: voices feed a send, the delay repeats into the compressor.
+    const delay = ctx.createDelay(2)
+    delay.delayTime.value = 0.26
+    const damp = ctx.createBiquadFilter()
+    damp.type = 'lowpass'
+    damp.frequency.value = 1600
+    damp.Q.value = 0.707
+    const feedback = ctx.createGain()
+    feedback.gain.value = 0.3
+    delay.connect(damp).connect(feedback).connect(delay)
+
+    const wet = ctx.createGain()
+    wet.gain.value = 0
+    delay.connect(wet).connect(comp)
+
+    const send = ctx.createGain()
+    send.gain.value = 1
+    send.connect(delay)
+    // Tapped after the level gate, not from the voice: a voice oscillates even
+    // when it is silent, and feeding that in makes the repeats sustain forever.
+    master.connect(send)
+
+    this.fxWet = wet
+    this.fxFeedback = feedback
+    this.fxDamp = damp
+
     this.spawn()
-    if (ctx.state !== 'running') await ctx.resume()
+    if (!this.offline && ctx.state !== 'running') await ctx.resume()
   }
 
   private spawn() {
@@ -122,17 +171,33 @@ export class WaaawEngine {
   }
 
   /**
-   * @param open  0..1 vertical opening
-   * @param wide  0..1 horizontal stretch
-   * @param round 0..1 aspect ratio of the opening
+   * The face-to-sound mapping lives here, and only here.
+   *
+   *   horizontal stretch → pitch      (swapped: was vertical)
+   *   vertical opening  → brightness  (swapped: was horizontal)
+   *   aspect ratio      → roundness   (darkens)
+   *   either mouth axis → loudness
+   *   wide eyes         → echo
+   *
+   * Loudness deliberately follows whichever mouth axis moved most, not the
+   * pitch axis: `wide` is 0 for a yawn, so gating on it would make yawning
+   * silent, and a yawn is the most waaaw a mouth can make.
    */
-  setMouth(open: number, wide: number, round: number) {
+  setFace(mouth: MouthReading) {
     const ctx = this.ctx
-    const voiced = open > GATE
-    this.params = { open, wide, round, voiced }
+    const drive = Math.max(mouth.open, mouth.wide)
+    const voiced = drive > GATE
+    this.params = {
+      pitch: mouth.wide,
+      bright: mouth.open,
+      round: mouth.round,
+      drive,
+      voiced,
+    }
     if (!ctx) return
 
     this.voice?.setParams(this.params)
+    this.setEcho(mouth.eyes)
 
     const master = this.master
     if (!master) return
@@ -142,8 +207,32 @@ export class WaaawEngine {
       master.gain.setTargetAtTime(0, t, release)
       return
     }
-    const level = (0.12 + PEAK_GAIN * Math.pow(open, 0.85)) * (this.instrument.level ?? 1)
+    const level = (0.12 + PEAK_GAIN * Math.pow(drive, 0.85)) * (this.instrument.level ?? 1)
     master.gain.setTargetAtTime(level, t, 0.02)
+  }
+
+  /**
+   * Wide eyes push the voice into a feedback delay. The wet path bypasses the
+   * level gate, so closing your mouth lets the repeats ring out instead of
+   * chopping them off.
+   */
+  private setEcho(eyes: number) {
+    const ctx = this.ctx
+    if (!ctx || !this.fxWet || !this.fxFeedback || !this.fxDamp) return
+    const t = ctx.currentTime
+    this.echo = eyes
+    this.fxWet.gain.setTargetAtTime(0.6 * eyes, t, 0.08)
+    this.fxFeedback.gain.setTargetAtTime(0.3 + 0.34 * eyes, t, 0.08)
+    // Wider eyes also give brighter, more present repeats.
+    this.fxDamp.frequency.setTargetAtTime(1600 + 2400 * eyes, t, 0.08)
+  }
+
+  get voiced() {
+    return this.params.voiced
+  }
+
+  get echoAmount() {
+    return this.echo
   }
 
   /** Current fundamental, for display. */
@@ -159,6 +248,10 @@ export class WaaawEngine {
     this.master = null
     this.voice = null
     this.voiceGain = null
+    this.fxWet = null
+    this.fxFeedback = null
+    this.fxDamp = null
+    if (this.offline) return
     try {
       await ctx.close()
     } catch {

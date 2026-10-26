@@ -1,24 +1,32 @@
 /**
- * Voices. Each one turns the two mouth axes into sound.
+ * Voices.
  *
- *   open  — vertical opening, 0..1. Pitch and loudness.
- *   wide  — horizontal stretch, 0..1. Brightness.
- *   round — aspect ratio of the opening, 0..1. Darkness ("ooooh" vs "aaaah").
+ * The engine does the mouth-to-sound mapping, so a voice only has to know what
+ * to do with four normalised signals:
+ *
+ *   pitch  — horizontal mouth stretch. Sets the fundamental.
+ *   bright — vertical mouth opening. Sets how bright the tone is.
+ *   round  — aspect ratio of the opening, 1 = pursed. Darkens the tone.
+ *   drive  — how far the mouth is doing anything at all. Sets loudness.
+ *
+ * Swapping what each axis controls is a change here plus one line in the
+ * engine, not a rewrite: the voices only see pitch/bright/round/drive.
  *
  * A voice owns its nodes and connects its output to the destination node the
  * engine hands it (a per-voice gain, so instruments can crossfade).
  */
 
-export type MouthParams = {
-  open: number
-  wide: number
+export type VoiceParams = {
+  pitch: number
+  bright: number
   round: number
+  drive: number
   /** True once the opening is past the engine's gate. */
   voiced: boolean
 }
 
 export interface Voice {
-  setParams(p: MouthParams, t?: number): void
+  setParams(p: VoiceParams, t?: number): void
   readonly hz: number
   dispose(): void
 }
@@ -83,6 +91,10 @@ function noiseSource(ctx: AudioContext, seconds = 2) {
   return src
 }
 
+/** How bright a voice should be, from the two tone axes. */
+const toneOf = (bright: number, round: number, pitch: number) =>
+  clamp(bright - 0.45 * round * (1 - pitch))
+
 /* ------------------------------------------------------------------ singer */
 
 const createSinger: Instrument['create'] = (ctx, dest) => {
@@ -129,23 +141,22 @@ const createSinger: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ open, wide, round }, t = ctx.currentTime) {
-      const e = ease(open)
-      hz = 92 + 208 * e
+    setParams({ pitch, bright, round, drive }, t = ctx.currentTime) {
+      hz = 92 + 208 * ease(pitch)
       osc.setHz(hz, t)
-      osc.depth.gain.setTargetAtTime(4 + 26 * open, t, 0.1)
-      // F1 follows the jaw, F2 the mouth's shape: stretched brightens, round darkens.
-      const f1 = 300 + 520 * open
-      const f2 = clamp(1100 + 900 * wide - 750 * round, 600, 2600)
-      const f3 = 2400 + 600 * wide
+      osc.depth.gain.setTargetAtTime(4 + 26 * pitch, t, 0.1)
+      // F1 tracks how far the jaw dropped, F2 how bright the tone is; a pursed
+      // opening pulls F2 down towards a dark "oo".
+      const tone = toneOf(bright, round, pitch)
+      const f1 = 300 + 520 * bright
+      const f2 = clamp(700 + 1500 * tone, 600, 2600)
+      const f3 = 2400 + 600 * bright
       f1Band.bp.frequency.setTargetAtTime(f1, t, 0.05)
       f2Band.bp.frequency.setTargetAtTime(f2, t, 0.05)
       f3Band.bp.frequency.setTargetAtTime(f3, t, 0.05)
-      // Upper formants also get louder as the mouth stretches, so the two
-      // axes are audible independently of where the resonances sit.
-      f2Band.g.gain.setTargetAtTime(0.85 * (0.5 + 0.5 * wide), t, 0.05)
-      f3Band.g.gain.setTargetAtTime(0.45 * (0.2 + 0.8 * wide) * (1 - 0.5 * round), t, 0.05)
-      breath.gain.setTargetAtTime(0.05 * e, t, 0.05)
+      f2Band.g.gain.setTargetAtTime(0.85 * (0.4 + 0.6 * tone), t, 0.05)
+      f3Band.g.gain.setTargetAtTime(0.45 * (0.15 + 0.85 * tone), t, 0.05)
+      breath.gain.setTargetAtTime(0.05 * ease(drive), t, 0.05)
     },
     dispose() {
       noise.stop()
@@ -198,15 +209,14 @@ const createViolin: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ open, wide, round }, t = ctx.currentTime) {
-      const e = ease(open)
-      hz = 196 + 464 * e // G3 → E5
+    setParams({ pitch, bright, round, drive }, t = ctx.currentTime) {
+      hz = 196 + 464 * ease(pitch) // G3 → E5
       osc.setHz(hz, t)
-      osc.depth.gain.setTargetAtTime(8 + 35 * open, t, 0.2)
-      const bright = clamp(0.5 * open + 0.6 * wide - 0.3 * round)
-      lowpass.frequency.setTargetAtTime(500 + 3200 * bright, t, 0.06)
-      lowpass.Q.setTargetAtTime(1.5 + 3 * bright, t, 0.06)
-      bow.gain.setTargetAtTime(0.02 * e, t, 0.05)
+      osc.depth.gain.setTargetAtTime(8 + 35 * pitch, t, 0.2)
+      const tone = toneOf(bright, round, pitch)
+      lowpass.frequency.setTargetAtTime(500 + 3300 * tone, t, 0.06)
+      lowpass.Q.setTargetAtTime(1.5 + 3 * tone, t, 0.06)
+      bow.gain.setTargetAtTime(0.02 * ease(drive), t, 0.05)
     },
     dispose() {
       noise.stop()
@@ -227,9 +237,9 @@ const createTheremin: Instrument['create'] = (ctx, dest) => {
   g1.gain.value = 1
   osc1.connect(g1).connect(out)
 
-  // Harmonics that appear as the mouth stretches sideways, and a sub-octave
-  // that takes over as it goes round. A pure sine can't get brighter, so the
-  // shape has to show up in the partials.
+  // Harmonics that appear as the tone brightens, and a sub-octave that takes
+  // over as the mouth goes round. A pure sine can't get brighter, so the shape
+  // has to show up in the partials.
   const partials = [2, 3].map((mult) => {
     const osc = ctx.createOscillator()
     osc.type = 'sine'
@@ -274,21 +284,20 @@ const createTheremin: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ open, wide, round }, t = ctx.currentTime) {
-      const e = ease(open)
-      hz = 130 + 750 * e // spooky range
+    setParams({ pitch, bright, round }, t = ctx.currentTime) {
+      hz = 130 + 750 * ease(pitch) // spooky range
       // Long glide: a theremin slides, it does not snap.
       osc1.frequency.setTargetAtTime(hz, t, 0.09)
       sub.frequency.setTargetAtTime(hz / 2, t, 0.09)
-      const bright = wide * (1 - 0.7 * round)
+      const tone = toneOf(bright, round, pitch)
       for (const p of partials) {
         p.osc.frequency.setTargetAtTime(hz * p.mult, t, 0.09)
-        p.g.gain.setTargetAtTime(0.28 * bright / p.mult, t, 0.05)
-        // Slight detune makes a beating wobble that grows as you stretch.
-        p.osc.detune.setTargetAtTime(wide * 14, t, 0.1)
+        p.g.gain.setTargetAtTime((0.3 * tone) / p.mult, t, 0.05)
+        // Slight detune makes a beating wobble that grows with brightness.
+        p.osc.detune.setTargetAtTime(tone * 14, t, 0.1)
       }
       subGain.gain.setTargetAtTime(0.35 * round, t, 0.05)
-      depth.gain.setTargetAtTime(12 + 40 * open, t, 0.2)
+      depth.gain.setTargetAtTime(12 + 40 * pitch, t, 0.2)
     },
     dispose() {
       osc1.stop()
@@ -307,7 +316,6 @@ const createKazoo: Instrument['create'] = (ctx, dest) => {
   out.connect(dest)
   const input = ctx.createGain()
 
-  // The buzzing membrane: a tight resonance well above the fundamental.
   const buzz = ctx.createBiquadFilter()
   buzz.type = 'bandpass'
   buzz.frequency.value = 1400
@@ -331,16 +339,16 @@ const createKazoo: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ open, wide, round }, t = ctx.currentTime) {
-      const e = ease(open)
-      hz = 110 + 240 * e
+    setParams({ pitch, bright, round }, t = ctx.currentTime) {
+      hz = 110 + 240 * ease(pitch)
       osc.setHz(hz, t)
-      osc.depth.gain.setTargetAtTime(20 + 45 * open, t, 0.12) // wobble hard
-      buzz.frequency.setTargetAtTime(clamp(900 + 900 * wide - 400 * round, 500, 2400), t, 0.05)
-      buzz.Q.setTargetAtTime(4 + 6 * (1 - wide), t, 0.05)
+      osc.depth.gain.setTargetAtTime(20 + 45 * pitch, t, 0.12) // wobble hard
+      const tone = toneOf(bright, round, pitch)
+      buzz.frequency.setTargetAtTime(clamp(700 + 1500 * tone, 500, 2400), t, 0.05)
+      buzz.Q.setTargetAtTime(4 + 6 * (1 - tone), t, 0.05)
       // The nasal band has to fade too, or it pins the tone bright no matter
       // how round the mouth is.
-      nasalGain.gain.setTargetAtTime(0.9 * (0.25 + 0.75 * wide) * (1 - 0.4 * round), t, 0.05)
+      nasalGain.gain.setTargetAtTime(0.9 * (0.2 + 0.8 * tone), t, 0.05)
     },
     dispose() {
       osc.dispose()
@@ -352,8 +360,8 @@ const createKazoo: Instrument['create'] = (ctx, dest) => {
 
 /**
  * Karplus–Strong: a noise burst injected into a damped delay line. The mouth
- * opening plucks it, so a waaaw comes out as a strum, and changing the opening
- * while it rings bends the string like a whammy bar.
+ * opening plucks it, so a waaaw comes out as a strum, and stretching the mouth
+ * retunes the string while it rings — a whammy bar made of lips.
  */
 const createGuitar: Instrument['create'] = (ctx, dest) => {
   const out = ctx.createGain()
@@ -411,7 +419,7 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
   }
 
   let hz = 110
-  let lastOpen = 0
+  let lastPitch = 0
   let lastPluck = 0
   let wasVoiced = false
 
@@ -427,27 +435,27 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ open, wide, round, voiced }, t = ctx.currentTime) {
-      const e = ease(open)
-      hz = 110 + 250 * e // A2 → ~D4
+    setParams({ pitch, bright, round, voiced }, t = ctx.currentTime) {
+      hz = 110 + 250 * ease(pitch) // A2 → ~D4
       // Retune the string; ringing notes bend to follow the mouth.
       delay.delayTime.setTargetAtTime(1 / clamp(hz, 60, 900), t, 0.03)
-      damp.frequency.setTargetAtTime(clamp(1200 + 3600 * wide - 900 * round, 500, 6000), t, 0.05)
+      const tone = toneOf(bright, round, pitch)
+      damp.frequency.setTargetAtTime(clamp(700 + 4200 * tone, 500, 6000), t, 0.05)
       // Stay comfortably under unity so plucks decay instead of growing.
-      fb.gain.setTargetAtTime(0.93 + 0.035 * (1 - round) + 0.02 * wide, t, 0.05)
+      fb.gain.setTargetAtTime(0.93 + 0.035 * (1 - round) + 0.02 * bright, t, 0.05)
 
       if (voiced) {
-        // Pluck on opening, restrike on a big change, and keep strumming
-        // slowly while the mouth stays open.
+        // Pluck on opening, restrike when the pitch is re-fretted, and keep
+        // strumming slowly while the mouth stays open.
         const rising = !wasVoiced
-        const jumped = Math.abs(open - lastOpen) > 0.22
+        const refretted = Math.abs(pitch - lastPitch) > 0.18
         const strum = t - lastPluck > 0.75
-        if (rising || jumped || strum) {
+        if (rising || refretted || strum) {
           pluck(t)
           lastPluck = t
         }
       }
-      lastOpen = voiced ? open : 0
+      lastPitch = voiced ? pitch : 0
       wasVoiced = voiced
     },
     dispose() {
@@ -460,7 +468,7 @@ export const INSTRUMENTS: Instrument[] = [
   {
     id: 'singer',
     label: 'Singer',
-    blurb: 'Formant voice: "ooooh" when round, "aaaah" when stretched.',
+    blurb: 'Formant voice: "ooooh" when round, "aaaah" when bright.',
     create: createSinger,
     level: 3.8,
   },
