@@ -16,6 +16,8 @@
  * engine hands it (a per-voice gain, so instruments can crossfade).
  */
 
+import { getSample, PET_SAMPLES } from './samples'
+
 export type VoiceParams = {
   pitch: number
   bright: number
@@ -791,6 +793,86 @@ const createBabyShark: Instrument['create'] = (ctx, dest) => {
   }
 }
 
+/**
+ * A pet voice built from a real recording.
+ *
+ * The mouth is the length again: the clip starts on the way in, then only its
+ * sustain loops while the mouth stays open, so holding it gives
+ * "niaaaaaaaaw" from a one-second meow. Playback rate follows how wide the
+ * mouth is — a tight mouth plays it fast and high (a short "niaw"), a wide one
+ * slow and low.
+ */
+const createSampledPet = (kind: 'cat' | 'dog', level: number): Instrument => {
+  const spec = PET_SAMPLES[kind]
+  return {
+    id: `pet-${kind}`,
+    label: kind === 'cat' ? 'Cat' : 'Dog',
+    blurb: kind === 'cat' ? 'real meow' : 'real howl',
+    level,
+    releaseMs: 120,
+    gate: 0.06,
+    create: (ctx, dest) => {
+      const buffer = getSample(kind)
+      if (!buffer) return null as unknown as Voice
+
+      const out = ctx.createGain()
+      out.gain.value = 0
+      out.connect(dest)
+
+      let src: AudioBufferSourceNode | null = null
+      let hz = 0
+
+      const rateFor = (bright: number) =>
+        spec.rateTight + (spec.rateWide - spec.rateTight) * clamp(bright)
+
+      const begin = (t: number, rate: number) => {
+        const node = ctx.createBufferSource()
+        node.buffer = buffer
+        node.loop = true
+        node.loopStart = spec.loopStart * buffer.duration
+        node.loopEnd = spec.loopEnd * buffer.duration
+        node.playbackRate.value = rate
+        node.connect(out)
+        node.start(t)
+        out.gain.setTargetAtTime(0.9, t, 0.008)
+        src = node
+      }
+
+      const end = (t: number) => {
+        const node = src
+        src = null
+        if (!node) return
+        out.gain.cancelScheduledValues(t)
+        out.gain.setTargetAtTime(0, t, 0.05)
+        try {
+          node.stop(t + 0.25)
+        } catch {
+          /* already stopped */
+        }
+      }
+
+      return {
+        get hz() {
+          return hz
+        },
+        setParams({ bright, voiced }, t = ctx.currentTime) {
+          const rate = rateFor(bright)
+          hz = 0 // sampled, so there is no fundamental to report
+          if (voiced) {
+            if (!src) begin(t, rate)
+            else src.playbackRate.setTargetAtTime(rate, t, 0.06)
+          } else if (src) {
+            end(t)
+          }
+        },
+        dispose() {
+          end(ctx.currentTime)
+        },
+      }
+    },
+  }
+}
+
 const petInstrument = (
   id: string,
   label: string,
@@ -801,8 +883,12 @@ const petInstrument = (
 ): Instrument => ({ id, label, blurb, create, level, releaseMs: 200, alwaysOn, gate: 0.06 })
 
 export const PET_INSTRUMENTS: Record<'cat' | 'dog' | 'baby', Instrument> = {
-  cat: petInstrument('pet-cat', 'Cat', 'midi miaw', createCatMeow, 0.36),
-  dog: petInstrument('pet-dog', 'Dog', 'awoooo', createDogHowl, 3.4),
+  cat: withSampleFallback(createSampledPet('cat', 1.7), () =>
+    petInstrument('pet-cat', 'Cat', 'midi miaw', createCatMeow, 0.36),
+  ),
+  dog: withSampleFallback(createSampledPet('dog', 1.7), () =>
+    petInstrument('pet-dog', 'Dog', 'awoooo', createDogHowl, 3.4),
+  ),
   baby: petInstrument('pet-baby', 'Tiny human', 'baby shark', createBabyShark, 1.6, true),
 }
 
@@ -1018,4 +1104,21 @@ export const DEFAULT_INSTRUMENT = 'singer'
 
 export function getInstrument(id: string) {
   return INSTRUMENTS.find((i) => i.id === id) ?? INSTRUMENTS[0]
+}
+
+/**
+ * Use the recording when it decoded, and the synthesised voice otherwise. The
+ * decision is made per create() call, so a sample that arrives late simply
+ * takes over on the next pet.
+ */
+function withSampleFallback(sampled: Instrument, fallback: () => Instrument): Instrument {
+  return {
+    ...sampled,
+    create: (ctx, dest) => {
+      const voice = sampled.create(ctx, dest)
+      // createSampledPet returns a null-ish voice when the buffer is missing
+      if (voice && (voice as { setParams?: unknown }).setParams) return voice
+      return fallback().create(ctx, dest)
+    },
+  }
 }

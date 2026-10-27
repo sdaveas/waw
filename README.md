@@ -17,6 +17,8 @@ npm run dev
 
 Open the printed URL, click **Enable camera & sound**, and open your mouth.
 
+Pet sounds live in `public/audio` and are committed, so they need no download step.
+
 `npm run setup` re-downloads the MediaPipe model and copies the wasm runtime into `public/` if you
 ever delete them — both are gitignored (about 29 MB of binaries). It also runs on `npm install`,
 so a fresh clone is ready to build with no extra steps.
@@ -168,10 +170,18 @@ trusted and stay gone for ten, so it does not flicker.
 and holding the mouth open stretches it out — `niaaaaaaaaaaw`, `aaawwwwwwwww`. The mouth is the
 gate, so closing it ends the sound with a downward "w" glide.
 
-The cat is a chiptune meow: a square wave whose pitch glide is **quantised to semitones and stepped**,
-the way an old sound chip would bend a note, over a nasal 1.9 kHz peak. The wider the mouth, the
-slower the glide unfolds (0.22 s to 1.7 s). The dog is a howl that slides from "ah" to "oo" while
-the pitch rises and sags, with vibrato creeping in.
+Both are **real recordings**, not synthesis — synthesised animal noises were not convincing:
+
+| sound | source | licence |
+| --- | --- | --- |
+| `public/audio/cat-meow.wav` | *Meow of a Siamese cat* (Wikimedia Commons) | CC0 |
+| `public/audio/dog-howl.wav` | *Jem howls* (Wikimedia Commons, by amethysta) | Public domain |
+
+They are still played like instruments rather than one-shots. The clip starts on the way in, then
+only its **sustain loops while the mouth stays open**, so a one-second meow can become
+"niaaaaaaaaw". Playback rate follows how wide the mouth is — a tight mouth plays it fast and high
+(short "niaw"), a wide one slow and low. If a sample fails to load, the voice falls back to the
+synthesised version rather than going silent.
 
 Both use a **lower gate than the instruments** (0.06 against 0.22), because a barely-open mouth is
 exactly how you get a small "niaw".

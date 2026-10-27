@@ -16,6 +16,7 @@ import {
   type Voice,
 } from './instruments'
 import type { PetKind } from './pets'
+import { loadPetSamples } from './samples'
 
 /**
  * How far the mouth must open before anything sounds. Low enough that a slight
@@ -195,6 +196,12 @@ export class WaaawEngine {
 
     this.spawn()
     if (!this.offline && ctx.state !== 'running') await ctx.resume()
+
+    // Pet sounds are recordings. Decode them once the context exists, and if a
+    // pet is already on camera, rebuild so it switches from synth to sample.
+    void loadPetSamples(ctx).then(() => {
+      if (this.petKind) this.rebuild()
+    })
   }
 
   private spawn() {
@@ -258,6 +265,10 @@ export class WaaawEngine {
   private swapTo(next: Instrument) {
     if (next.id === this.instrument.id) return
     this.instrument = next
+    this.rebuild()
+  }
+
+  private rebuild() {
     if (!this.ctx) return
     this.killVoice()
     const token = ++this.spawnToken
