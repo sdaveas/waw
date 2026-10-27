@@ -142,6 +142,12 @@ Two details that the model's own output does not get right:
 The hand model runs on every second frame. Running both models on every frame cost more than
 half the frame rate for no benefit, since the wah is smoothed anyway.
 
+The guitar's wah is the mouth, not a timer. It started life as a lowpass ramped down on every
+pluck, which is an auto-wah — it ignored the player. It is now a bandpass whose peak follows
+`bright` (mouth opening) and a parallel dry path, so the peak moving between string harmonics
+colours the note instead of gating it. Measured: energy centroid 705 Hz with the mouth shut, 2906
+Hz wide open, with level even to within 1.4×.
+
 ### Pet mode
 
 Bring a cat or a dog to the camera and the instrument is replaced by that animal's voice: a
@@ -178,7 +184,7 @@ Five voices in `src/lib/instruments.ts`, all built from Web Audio primitives:
 | **Kazoo** | saw through a tight buzzing bandpass, with heavy wobble |
 | **Choir** | four sawtooths detuned against each other, one vowel, slow to bloom |
 | **Organ** | six sines as drawbars with a rotary tremolo |
-| **Guitar** | **wah guitar**: Karplus–Strong pluck into a resonant filter that sweeps down on every note |
+| **Guitar** | **wah guitar**: Karplus–Strong pluck through a bandpass whose peak follows the mouth |
 
 Audio engages from **openness 0.22** — a slight parting is enough to sing. A resting face still
 measures 0.00, so a closed mouth stays properly silent.

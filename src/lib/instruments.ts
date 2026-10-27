@@ -400,13 +400,24 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
 
   delay.connect(damp).connect(rumbleCut).connect(limiter).connect(fb).connect(delay)
 
-  // Wah guitar: a resonant filter in series on the way out, swept down on every
-  // pluck. The "wacka" is the filter moving, not the string.
+  // The wah itself: a resonant bandpass in series, with its peak parked
+  // somewhere and then moved by the mouth. A wah pedal is exactly this — a
+  // narrow peak sweeping across the signal — so the sweep has to come from the
+  // player, not from a fixed ramp on each pluck.
   const wah = ctx.createBiquadFilter()
-  wah.type = 'lowpass'
-  wah.frequency.value = 900
-  wah.Q.value = 7
-  delay.connect(wah).connect(out)
+  wah.type = 'bandpass'
+  wah.frequency.value = 700
+  wah.Q.value = 3.2
+
+  // A narrow peak parked between the string's harmonics would gate the note,
+  // so keep a straight-through path alongside it: the wah colours the sound
+  // instead of switching it on and off as the peak moves past each harmonic.
+  const wahGain = ctx.createGain()
+  wahGain.gain.value = 0.85
+  const dryGain = ctx.createGain()
+  dryGain.gain.value = 0.4
+  delay.connect(wah).connect(wahGain).connect(out)
+  delay.connect(dryGain).connect(out)
 
   // Soundbox colour.
   for (const { hz, q, gain } of [
@@ -440,10 +451,6 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
     src.connect(delay)
     src.start(when)
     src.stop(when + 0.05)
-    // the wah sweep that goes with the pluck
-    wah.frequency.cancelScheduledValues(when)
-    wah.frequency.setValueAtTime(2800, when)
-    wah.frequency.exponentialRampToValueAtTime(380, when + 0.32)
   }
 
   return {
@@ -456,6 +463,10 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
       delay.delayTime.setTargetAtTime(1 / clamp(hz, 60, 900), t, 0.03)
       const tone = toneOf(bright, round, pitch)
       damp.frequency.setTargetAtTime(clamp(700 + 4200 * tone, 500, 6000), t, 0.05)
+      // Open your mouth and the peak climbs, from a closed "wuh" to an open
+      // "wah". Logarithmic, because pitch is.
+      const wahHz = 330 * Math.pow(2500 / 330, clamp(bright))
+      wah.frequency.setTargetAtTime(wahHz, t, 0.025)
       // Stay comfortably under unity so plucks decay instead of growing.
       fb.gain.setTargetAtTime(0.93 + 0.035 * (1 - round) + 0.02 * bright, t, 0.05)
 
@@ -998,7 +1009,7 @@ export const INSTRUMENTS: Instrument[] = [
   {
     id: 'guitar',
     label: 'Guitar',
-    blurb: 'Wah guitar: strums when you open, filter sweeps on every note.',
+    blurb: 'Wah guitar: the mouth is the pedal — open it to sweep the peak.',
     create: createGuitar,
     // the wah filter eats a lot of the pluck, so it needs a bigger trim
     level: 2.6,
