@@ -483,60 +483,102 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
 /* -------------------------------------------------------------- pet voices */
 
 /**
- * A meow is a formant glide: the mouth says "ee" then "ow", so both formants
- * slide down while the pitch rises and falls. Triggered once per mouth opening,
- * so a few open/close cycles give "miaw miaw miaw".
+ * A MIDI cat. The trick that makes it read as "MIDI" rather than "synth" is
+ * that the pitch glide is quantised to semitones and stepped, the way an old
+ * sound chip would do it, over a square wave with a nasal 1.9 kHz peak.
+ *
+ * Two syllables: "mi" (short, bright) then "aow" (gliding down).
  */
-const createMeow: Instrument['create'] = (ctx, dest) => {
+const createCatMeow: Instrument['create'] = (ctx, dest) => {
   const out = ctx.createGain()
   out.connect(dest)
   const input = ctx.createGain()
 
-  const bands = [700, 1800].map((hz) => {
-    const bp = ctx.createBiquadFilter()
-    bp.type = 'bandpass'
-    bp.frequency.value = hz
-    bp.Q.value = 6
-    const g = ctx.createGain()
-    g.gain.value = 0.9
-    input.connect(bp).connect(g).connect(out)
-    return bp
-  })
+  const nasal = ctx.createBiquadFilter()
+  nasal.type = 'peaking'
+  nasal.frequency.value = 1900
+  nasal.Q.value = 1.1
+  nasal.gain.value = 12
+  input.connect(nasal).connect(out)
 
-  const osc = ctx.createOscillator()
-  osc.type = 'sawtooth'
-  osc.frequency.value = 400
-  osc.connect(input)
-  osc.start()
+  const lowpass = ctx.createBiquadFilter()
+  lowpass.type = 'lowpass'
+  lowpass.frequency.value = 5200
+  input.connect(lowpass).connect(out)
+
+  const square = ctx.createOscillator()
+  square.type = 'square'
+  square.frequency.value = 600
+  square.connect(input)
+  square.start()
+
+  // An octave down on a triangle, for a bit of body under the buzz.
+  const body = ctx.createOscillator()
+  body.type = 'triangle'
+  body.frequency.value = 300
+  const bodyGain = ctx.createGain()
+  bodyGain.gain.value = 0.35
+  body.connect(bodyGain).connect(input)
+  body.start()
 
   const amp = ctx.createGain()
   amp.gain.value = 0
   out.disconnect(dest)
   out.connect(amp).connect(dest)
 
-  let hz = 400
+  const vibrato = ctx.createOscillator()
+  vibrato.type = 'sine'
+  vibrato.frequency.value = 7.5
+  const vibDepth = ctx.createGain()
+  vibDepth.gain.value = 55
+  vibrato.connect(vibDepth)
+  vibDepth.connect(square.frequency)
+  vibrato.start()
+
+  let hz = 600
   let nextAt = 0
 
+  const quantise = (f: number) => 440 * Math.pow(2, Math.round(12 * Math.log2(f / 440)) / 12)
+
   const meow = (t: number, open: number) => {
-    const top = 380 + 320 * open
-    // pitch: up then down, the shape of a question
-    osc.frequency.cancelScheduledValues(t)
-    osc.frequency.setValueAtTime(300 + 120 * open, t)
-    osc.frequency.linearRampToValueAtTime(top, t + 0.12)
-    osc.frequency.linearRampToValueAtTime(top * 0.62, t + 0.45)
-    // formants: "ee" → "ow"
-    bands[0].frequency.cancelScheduledValues(t)
-    bands[0].frequency.setValueAtTime(900, t)
-    bands[0].frequency.linearRampToValueAtTime(420, t + 0.42)
-    bands[1].frequency.cancelScheduledValues(t)
-    bands[1].frequency.setValueAtTime(2200, t)
-    bands[1].frequency.linearRampToValueAtTime(950, t + 0.42)
-    // envelope
+    const dur = 0.52
+    const base = 560 + 300 * open
+    const contour: Array<[number, number]> = [
+      [0, 1.06],
+      [0.14, 0.94],
+      [0.32, 1.26],
+      [0.62, 1.0],
+      [1, 0.6],
+    ]
+    const at = (u: number) => {
+      for (let i = 1; i < contour.length; i++) {
+        const [u1, v1] = contour[i]
+        const [u0, v0] = contour[i - 1]
+        if (u <= u1) return v0 + ((v1 - v0) * (u - u0)) / (u1 - u0)
+      }
+      return contour[contour.length - 1][1]
+    }
+
+    // Stepped, quantised glide: this is the "MIDI" part.
+    const steps = 26
+    square.frequency.cancelScheduledValues(t)
+    body.frequency.cancelScheduledValues(t)
+    for (let i = 0; i < steps; i++) {
+      const u = i / (steps - 1)
+      const f = quantise(base * at(u))
+      square.frequency.setValueAtTime(f, t + u * dur)
+      body.frequency.setValueAtTime(f / 2, t + u * dur)
+    }
+    hz = base
+
+    // "mi" then "aow": two humps in the envelope.
     amp.gain.cancelScheduledValues(t)
     amp.gain.setValueAtTime(0, t)
-    amp.gain.linearRampToValueAtTime(0.9, t + 0.03)
-    amp.gain.linearRampToValueAtTime(0.55, t + 0.2)
-    amp.gain.linearRampToValueAtTime(0, t + 0.5)
+    amp.gain.linearRampToValueAtTime(0.85, t + 0.02)
+    amp.gain.linearRampToValueAtTime(0.5, t + 0.16)
+    amp.gain.linearRampToValueAtTime(0.95, t + 0.3)
+    amp.gain.linearRampToValueAtTime(0.4, t + 0.44)
+    amp.gain.exponentialRampToValueAtTime(0.001, t + dur + 0.06)
   }
 
   return {
@@ -544,65 +586,112 @@ const createMeow: Instrument['create'] = (ctx, dest) => {
       return hz
     },
     setParams({ pitch }, t = ctx.currentTime) {
-      hz = 300 + 440 * pitch
-      // A cat just keeps meowing; the mouth only bends the pitch.
+      hz = 560 + 300 * pitch
       if (t >= nextAt) {
         meow(t, pitch)
-        nextAt = t + 1.05 + Math.random() * 0.3
+        nextAt = t + 1.25 + Math.random() * 0.35
       }
     },
     dispose() {
-      osc.stop()
+      square.stop()
+      body.stop()
+      vibrato.stop()
     },
   }
 }
 
 /**
- * A bark: three short bursts of noise through a low band, each with a fast
- * pitch drop. "waw waw waw" on every mouth opening.
+ * A dog howl: "awooooo". One long note rather than barks — the vowel slides
+ * from "ah" to "oo" while the pitch rises and then sags away, with vibrato
+ * creeping in as it goes.
  */
-const createBark: Instrument['create'] = (ctx, dest) => {
+const createDogHowl: Instrument['create'] = (ctx, dest) => {
   const out = ctx.createGain()
   out.connect(dest)
+  const input = ctx.createGain()
+
+  const formants = [
+    { hz: 750, q: 5, gain: 1 },
+    { hz: 1150, q: 6, gain: 0.6 },
+  ].map((spec) => {
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = spec.hz
+    bp.Q.value = spec.q
+    const g = ctx.createGain()
+    g.gain.value = spec.gain
+    input.connect(bp).connect(g).connect(out)
+    return bp
+  })
+
+  const saw = ctx.createOscillator()
+  saw.type = 'sawtooth'
+  saw.frequency.value = 220
+  saw.connect(input)
+  saw.start()
 
   const noise = noiseSource(ctx, 1)
-  const bp = ctx.createBiquadFilter()
-  bp.type = 'bandpass'
-  bp.frequency.value = 700
-  bp.Q.value = 1.2
-  const amp = ctx.createGain()
-  amp.gain.value = 0
-  noise.connect(bp).connect(amp).connect(out)
+  const breathBp = ctx.createBiquadFilter()
+  breathBp.type = 'bandpass'
+  breathBp.frequency.value = 1200
+  breathBp.Q.value = 0.6
+  const breath = ctx.createGain()
+  breath.gain.value = 0
+  noise.connect(breathBp).connect(breath).connect(out)
   noise.start()
 
-  const sub = ctx.createOscillator()
-  sub.type = 'sawtooth'
-  sub.frequency.value = 160
-  const subAmp = ctx.createGain()
-  subAmp.gain.value = 0
-  sub.connect(subAmp).connect(out)
-  sub.start()
+  const amp = ctx.createGain()
+  amp.gain.value = 0
+  out.disconnect(dest)
+  out.connect(amp).connect(dest)
 
-  let hz = 160
-  let nextBark = 0
+  const vibrato = ctx.createOscillator()
+  vibrato.type = 'sine'
+  vibrato.frequency.value = 5.4
+  const vibDepth = ctx.createGain()
+  vibDepth.gain.value = 0
+  vibrato.connect(vibDepth)
+  vibDepth.connect(saw.frequency)
+  vibrato.start()
 
-  const bark = (t: number, pitch: number) => {
-    const f = 150 + 120 * pitch
-    bp.frequency.cancelScheduledValues(t)
-    bp.frequency.setValueAtTime(f * 2.2, t)
-    bp.frequency.exponentialRampToValueAtTime(f, t + 0.1)
+  let hz = 220
+  let nextAt = 0
+
+  const howl = (t: number, open: number) => {
+    const dur = 1.45
+    const f0 = 185 + 80 * open
+
+    saw.frequency.cancelScheduledValues(t)
+    saw.frequency.setValueAtTime(f0 * 0.85, t)
+    saw.frequency.linearRampToValueAtTime(f0 * 1.32, t + 0.32)
+    saw.frequency.linearRampToValueAtTime(f0 * 1.22, t + 0.95)
+    saw.frequency.linearRampToValueAtTime(f0 * 0.78, t + dur)
+    hz = f0
+
+    // "ah" → "oo": both formants slide down.
+    formants[0].frequency.cancelScheduledValues(t)
+    formants[0].frequency.setValueAtTime(780, t)
+    formants[0].frequency.linearRampToValueAtTime(330, t + dur * 0.85)
+    formants[1].frequency.cancelScheduledValues(t)
+    formants[1].frequency.setValueAtTime(1180, t)
+    formants[1].frequency.linearRampToValueAtTime(760, t + dur * 0.85)
+
+    vibrato.frequency.setValueAtTime(5.2, t)
+    vibDepth.gain.cancelScheduledValues(t)
+    vibDepth.gain.setValueAtTime(0, t)
+    vibDepth.gain.linearRampToValueAtTime(6, t + 0.5)
+    vibDepth.gain.linearRampToValueAtTime(14, t + 1.1)
+
     amp.gain.cancelScheduledValues(t)
     amp.gain.setValueAtTime(0, t)
-    amp.gain.linearRampToValueAtTime(1.1, t + 0.012)
-    amp.gain.exponentialRampToValueAtTime(0.001, t + 0.16)
+    amp.gain.linearRampToValueAtTime(0.95, t + 0.09)
+    amp.gain.linearRampToValueAtTime(0.8, t + dur * 0.6)
+    amp.gain.linearRampToValueAtTime(0, t + dur)
 
-    sub.frequency.cancelScheduledValues(t)
-    sub.frequency.setValueAtTime(f * 1.4, t)
-    sub.frequency.exponentialRampToValueAtTime(f * 0.7, t + 0.14)
-    subAmp.gain.cancelScheduledValues(t)
-    subAmp.gain.setValueAtTime(0, t)
-    subAmp.gain.linearRampToValueAtTime(0.7, t + 0.012)
-    subAmp.gain.exponentialRampToValueAtTime(0.001, t + 0.15)
+    breath.gain.cancelScheduledValues(t)
+    breath.gain.setValueAtTime(0, t)
+    breath.gain.linearRampToValueAtTime(0.05, t + 0.1)
+    breath.gain.linearRampToValueAtTime(0, t + dur)
   }
 
   return {
@@ -610,16 +699,16 @@ const createBark: Instrument['create'] = (ctx, dest) => {
       return hz
     },
     setParams({ pitch }, t = ctx.currentTime) {
-      hz = 150 + 120 * pitch
-      // "waw waw waw" on its own schedule, three barks at a time.
-      if (t >= nextBark) {
-        for (let i = 0; i < 3; i++) bark(t + i * 0.26, pitch)
-        nextBark = t + 3 * 0.26 + 0.9
+      hz = 185 + 80 * pitch
+      if (t >= nextAt) {
+        howl(t, pitch)
+        nextAt = t + 2.6 + Math.random() * 0.6
       }
     },
     dispose() {
+      saw.stop()
       noise.stop()
-      sub.stop()
+      vibrato.stop()
     },
   }
 }
@@ -704,8 +793,8 @@ const petInstrument = (
 ): Instrument => ({ id, label, blurb, create, level, releaseMs: 200, alwaysOn })
 
 export const PET_INSTRUMENTS: Record<'cat' | 'dog' | 'baby', Instrument> = {
-  cat: petInstrument('pet-cat', 'Cat', 'miaw miaw miaw', createMeow, 1.3, true),
-  dog: petInstrument('pet-dog', 'Dog', 'waw waw waw', createBark, 1.1, true),
+  cat: petInstrument('pet-cat', 'Cat', 'midi miaw', createCatMeow, 0.38, true),
+  dog: petInstrument('pet-dog', 'Dog', 'awoooo', createDogHowl, 3.4, true),
   baby: petInstrument('pet-baby', 'Tiny human', 'baby shark', createBabyShark, 1.6, true),
 }
 

@@ -20,8 +20,8 @@ const HANDS_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints
 const PET_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 9 : 6
 
 const PET_DETAIL: Record<'cat' | 'dog' | 'baby', string> = {
-  cat: 'miaw miaw miaw',
-  dog: 'waw waw waw',
+  cat: 'midi miaw',
+  dog: 'awoooo',
   baby: 'baby shark',
 }
 

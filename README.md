@@ -144,8 +144,8 @@ half the frame rate for no benefit, since the wah is smoothed anyway.
 
 ### Pet mode
 
-Bring a cat or a dog to the camera and the instrument is replaced by that animal's voice: **miaw
-miaw miaw** or **waw waw waw**. The indicator sits under the mute button and lights up when one
+Bring a cat or a dog to the camera and the instrument is replaced by that animal's voice: a
+**MIDI miaw** or an **awoooo**. The indicator sits under the mute button and lights up when one
 turns up. It is not a control; hover it and it says *bring your pet to unlock*, with the small print
 *[\*pets include tiny humans]*.
 
@@ -153,6 +153,11 @@ Cats and dogs come from MediaPipe's COCO object detector. Cats are reliable (0.7
 Dogs are mostly reliable — a clear retriever scores 0.9, but a fluffy one can come back as "bear"
 (0.45) and a dog held by a person only scores 0.17. A detection has to hold for four frames to be
 trusted and stay gone for ten, so it does not flicker.
+
+The cat is a chiptune meow: a square wave whose pitch glide is **quantised to semitones and stepped**,
+the way an old sound chip would bend a note, over a nasal 1.9 kHz peak, in two syllables — "mi" then
+"aow". The dog is a single long howl that slides from "ah" to "oo" while the pitch rises and sags
+away, with vibrato creeping in as it goes.
 
 **Tiny humans are inferred, not detected.** There is no baby class in COCO, and face geometry does
 not separate them: eye separation over face height measures 0.51–0.70 for babies against 0.48–0.61
