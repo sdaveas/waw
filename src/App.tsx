@@ -15,7 +15,15 @@ const ZERO = { open: 0, wide: 0, round: 0, eyes: 0 }
  * every frame halved the frame rate. The wah is smoothed anyway, so hands run
  * on every other frame and the last result is reused in between.
  */
-const HANDS_EVERY = 2
+const HANDS_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 3 : 2
+
+/** Phones get a smaller capture and a lighter model load. */
+const IS_TOUCH = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0
+/** iPadOS reports itself as a Mac, hence the touch-point check. */
+const IS_IOS =
+  typeof navigator !== 'undefined' &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent)))
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -45,6 +53,7 @@ export default function App() {
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
+  const [audioState, setAudioState] = useState<AudioContextState | 'none'>('none')
   const [instrumentId, setInstrumentId] = useState(DEFAULT_INSTRUMENT)
 
   const teardown = useCallback(() => {
@@ -64,6 +73,25 @@ export default function App() {
 
   useEffect(() => teardown, [teardown])
 
+  // iOS suspends the context on a call, a route change or a lock. Nudge it back
+  // whenever the page is visible again, and let any tap do it too.
+  useEffect(() => {
+    const wake = () => {
+      const engine = engineRef.current
+      // Safari says "interrupted", not just "suspended".
+      if (engine && engine.state !== 'running' && engine.state !== 'none') void engine.resume()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') wake()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pointerdown', wake)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pointerdown', wake)
+    }
+  }, [])
+
   const toggleMute = () => {
     mutedRef.current = !mutedRef.current
     setMuted(mutedRef.current)
@@ -78,12 +106,26 @@ export default function App() {
   const start = async () => {
     setError(null)
     setStatus('loading')
+
+    // The audio context has to be created and resumed inside the click handler.
+    // Loading the models first costs seconds, and mobile browsers drop the user
+    // gesture after the first await — leaving the context suspended and the app
+    // silent with no error. This call is deliberately before any await.
+    const engine = new WaaawEngine(instrumentId)
+    engine.onStateChange = setAudioState
+    engineRef.current = engine
+    const audioReady = engine.start()
+
     try {
       const [landmarker, handLandmarker, stream] = await Promise.all([
         getLandmarker(),
         getHandLandmarker(),
         navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 720 } },
+          video: {
+            facingMode: 'user',
+            width: { ideal: IS_TOUCH ? 640 : 960 },
+            height: { ideal: IS_TOUCH ? 480 : 720 },
+          },
           audio: false,
         }),
       ])
@@ -96,9 +138,7 @@ export default function App() {
       video.srcObject = stream
       await video.play()
 
-      const engine = new WaaawEngine(instrumentId)
-      await engine.start()
-      engineRef.current = engine
+      await audioReady
 
       setStatus('running')
       rafRef.current = requestAnimationFrame(frame)
@@ -348,9 +388,19 @@ export default function App() {
           </div>
         )}
 
+        {status === 'running' && audioState !== 'running' && audioState !== 'none' && (
+          <button
+            onClick={() => void engineRef.current?.resume()}
+            className="absolute inset-0 flex items-center justify-center bg-ink/70 text-sm font-medium text-amber-200 backdrop-blur-sm"
+          >
+            Audio is paused by the browser ({audioState}) — tap to start sound
+          </button>
+        )}
+
         {status === 'running' && (
           <button
             onClick={toggleMute}
+            data-audio-state={audioState}
             className="absolute top-3 right-3 rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-paper/80 backdrop-blur transition hover:bg-black/70"
           >
             {muted ? 'unmute' : 'mute'}
@@ -412,6 +462,13 @@ export default function App() {
           />
         </div>
       </div>
+
+      {IS_IOS && (
+        <p className="max-w-md text-center text-xs text-amber-200/60">
+          On iPhone: the side switch above the volume keys silences browser audio even when the
+          volume is up. If it goes quiet, check that switch first.
+        </p>
+      )}
 
       <p className="max-w-md text-center text-xs text-paper/35">
         Opening the mouth vertically sets the volume (and brightens the tone; a pursed

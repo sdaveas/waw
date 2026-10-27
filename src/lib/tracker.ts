@@ -19,21 +19,38 @@ function fileset() {
   return filesetPromise
 }
 
+/**
+ * Build with the GPU delegate, and fall back to CPU if the device cannot do it.
+ * Some mobile GPUs reject the delegate outright, which used to mean the app
+ * simply never started.
+ */
+async function createWithFallback<T>(
+  create: (delegate: 'GPU' | 'CPU') => Promise<T>,
+): Promise<T> {
+  try {
+    return await create('GPU')
+  } catch {
+    return await create('CPU')
+  }
+}
+
 /** Lazily load the face model once per page. */
 export function getLandmarker() {
   if (!facePromise) {
     facePromise = (async () =>
-      FaceLandmarker.createFromOptions(await fileset(), {
-        baseOptions: {
-          modelAssetPath: `${BASE}models/face_landmarker.task`,
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        minFaceDetectionConfidence: 0.5,
-        minFacePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      }))().catch((err) => {
+      createWithFallback(async (delegate) =>
+        FaceLandmarker.createFromOptions(await fileset(), {
+          baseOptions: {
+            modelAssetPath: `${BASE}models/face_landmarker.task`,
+            delegate,
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        }),
+      ))().catch((err) => {
       facePromise = null
       throw err
     })
@@ -45,17 +62,19 @@ export function getLandmarker() {
 export function getHandLandmarker() {
   if (!handPromise) {
     handPromise = (async () =>
-      HandLandmarker.createFromOptions(await fileset(), {
-        baseOptions: {
-          modelAssetPath: `${BASE}models/hand_landmarker.task`,
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      }))().catch((err) => {
+      createWithFallback(async (delegate) =>
+        HandLandmarker.createFromOptions(await fileset(), {
+          baseOptions: {
+            modelAssetPath: `${BASE}models/hand_landmarker.task`,
+            delegate,
+          },
+          runningMode: 'VIDEO',
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        }),
+      ))().catch((err) => {
       handPromise = null
       throw err
     })

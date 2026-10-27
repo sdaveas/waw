@@ -81,6 +81,22 @@ export class WaaawEngine {
     return this.ctx?.state === 'running'
   }
 
+  /** 'suspended' means the browser is holding the audio, not that we are mute. */
+  get state(): AudioContextState | 'none' {
+    return this.ctx?.state ?? 'none'
+  }
+
+  /** iOS interrupts the context on a route change, a call, or screen lock. */
+  onStateChange?: (state: AudioContextState) => void
+
+  async resume() {
+    try {
+      await this.ctx?.resume()
+    } catch {
+      /* not resumable without a gesture; the caller shows a tap prompt */
+    }
+  }
+
   /** Must be called from a user-gesture handler or the context stays suspended. */
   async start(instrumentId?: string) {
     if (instrumentId) this.instrument = getInstrument(instrumentId)
@@ -96,6 +112,18 @@ export class WaaawEngine {
     // An offline context renders on a clock we do not drive.
     this.offline = typeof (ctx as unknown as { startRendering?: unknown }).startRendering === 'function'
     this.ctx = ctx
+    if (!this.offline) {
+      ctx.onstatechange = () => this.onStateChange?.(ctx.state)
+      // iOS routes Web Audio as "ambient" by default, which the hardware ringer
+      // switch silences entirely. Asking for "playback" makes it audible with
+      // the switch off. Feature-detected: only newer Safari has this.
+      try {
+        const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession
+        if (session) session.type = 'playback'
+      } catch {
+        /* older browser, nothing to do */
+      }
+    }
 
     // A compressor sits after the level control: instrument trims can then be
     // matched for loudness without the peaks clipping the output.

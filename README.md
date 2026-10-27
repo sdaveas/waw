@@ -164,6 +164,26 @@ instead of ringing out.
 A compressor sits after both paths, so instrument trims can be matched for loudness without the
 peaks clipping.
 
+## When there is no sound (mostly a phone problem)
+
+Three separate causes, all now handled or made visible:
+
+1. **The audio context started suspended.** Browsers only allow audio to start inside a user
+   gesture, and mobile ones drop the gesture after the first `await`. The app used to create the
+   engine *after* loading three models, which on a phone could land well outside the gesture — the
+   context then stays `suspended` and nothing is audible, with no error. The engine is now created
+   and resumed synchronously in the click handler, before any `await`.
+2. **iOS mutes Web Audio with the side switch.** Web Audio is routed as "ambient" on iOS, so the
+   hardware ringer switch silences it even at full volume. The app asks for the `playback` audio
+   session where the browser exposes one, and shows an iPhone-specific hint otherwise.
+3. **The context gets interrupted.** A call, a route change or the lock screen can suspend it, and
+   Safari reports that as `interrupted` rather than `suspended`. Any tap or returning to the tab
+   resumes it, and while it is not running the page shows a "tap to start sound" prompt with the
+   actual state, so the failure is visible instead of silent.
+
+Also for phones: the capture drops to 640×480, the hand model runs on every third frame instead of
+every second, and both models fall back to a CPU delegate if the GPU one is rejected.
+
 ## Tuning
 
 | what | where |
