@@ -85,6 +85,10 @@ export type FaceState = {
   vertical: number
   horizontal: number
   ear: number
+  /** Face height as a fraction of frame height: how big the face is on screen. */
+  heightRatio: number
+  /** Eye separation over face height: the "big eyes" baby cue. */
+  eyesOverFaceH: number
   /** Closed polygons in video pixel space. */
   oval: Array<{ x: number; y: number }>
   eyeOvals: [Array<{ x: number; y: number }>, Array<{ x: number; y: number }>]
@@ -159,6 +163,12 @@ export function readFace(
 
   const eyes = clamp((ear - EAR_REST) / (EAR_WIDE - EAR_REST))
 
+  // Forehead (10) to chin (152): the whole face, for the "tiny human" cue.
+  const brow = px(10)
+  const chin = px(152)
+  const faceHeight = Math.hypot(chin.x - brow.x, chin.y - brow.y)
+  const eyesSpan = Math.hypot(eyeB.x - eyeA.x, eyeB.y - eyeA.y)
+
   return {
     open,
     wide,
@@ -167,6 +177,8 @@ export function readFace(
     vertical,
     horizontal,
     ear,
+    heightRatio: faceHeight / height,
+    eyesOverFaceH: faceHeight > 1 ? eyesSpan / faceHeight : 0,
     oval: OVAL_RING.map(px),
     eyeOvals: [EYE_RING_RIGHT.map(px), EYE_RING_LEFT.map(px)],
   }

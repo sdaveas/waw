@@ -40,6 +40,10 @@ export type Instrument = {
   level?: number
   /** How long the sound rings after the mouth closes, in ms. */
   releaseMs?: number
+  /** Keeps playing regardless of the mouth gate (the baby shark loop). */
+  alwaysOn?: boolean
+  /** How long the level takes to arrive, in ms. Choirs bloom, organs snap. */
+  attackMs?: number
 }
 
 const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v))
@@ -395,7 +399,14 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
   limiter.oversample = '2x'
 
   delay.connect(damp).connect(rumbleCut).connect(limiter).connect(fb).connect(delay)
-  delay.connect(out)
+
+  // Wah guitar: a resonant filter in series on the way out, swept down on every
+  // pluck. The "wacka" is the filter moving, not the string.
+  const wah = ctx.createBiquadFilter()
+  wah.type = 'lowpass'
+  wah.frequency.value = 900
+  wah.Q.value = 7
+  delay.connect(wah).connect(out)
 
   // Soundbox colour.
   for (const { hz, q, gain } of [
@@ -429,6 +440,10 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
     src.connect(delay)
     src.start(when)
     src.stop(when + 0.05)
+    // the wah sweep that goes with the pluck
+    wah.frequency.cancelScheduledValues(when)
+    wah.frequency.setValueAtTime(2800, when)
+    wah.frequency.exponentialRampToValueAtTime(380, when + 0.32)
   }
 
   return {
@@ -464,6 +479,388 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
   }
 }
 
+
+/* -------------------------------------------------------------- pet voices */
+
+/**
+ * A meow is a formant glide: the mouth says "ee" then "ow", so both formants
+ * slide down while the pitch rises and falls. Triggered once per mouth opening,
+ * so a few open/close cycles give "miaw miaw miaw".
+ */
+const createMeow: Instrument['create'] = (ctx, dest) => {
+  const out = ctx.createGain()
+  out.connect(dest)
+  const input = ctx.createGain()
+
+  const bands = [700, 1800].map((hz) => {
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = hz
+    bp.Q.value = 6
+    const g = ctx.createGain()
+    g.gain.value = 0.9
+    input.connect(bp).connect(g).connect(out)
+    return bp
+  })
+
+  const osc = ctx.createOscillator()
+  osc.type = 'sawtooth'
+  osc.frequency.value = 400
+  osc.connect(input)
+  osc.start()
+
+  const amp = ctx.createGain()
+  amp.gain.value = 0
+  out.disconnect(dest)
+  out.connect(amp).connect(dest)
+
+  let hz = 400
+  let nextAt = 0
+
+  const meow = (t: number, open: number) => {
+    const top = 380 + 320 * open
+    // pitch: up then down, the shape of a question
+    osc.frequency.cancelScheduledValues(t)
+    osc.frequency.setValueAtTime(300 + 120 * open, t)
+    osc.frequency.linearRampToValueAtTime(top, t + 0.12)
+    osc.frequency.linearRampToValueAtTime(top * 0.62, t + 0.45)
+    // formants: "ee" → "ow"
+    bands[0].frequency.cancelScheduledValues(t)
+    bands[0].frequency.setValueAtTime(900, t)
+    bands[0].frequency.linearRampToValueAtTime(420, t + 0.42)
+    bands[1].frequency.cancelScheduledValues(t)
+    bands[1].frequency.setValueAtTime(2200, t)
+    bands[1].frequency.linearRampToValueAtTime(950, t + 0.42)
+    // envelope
+    amp.gain.cancelScheduledValues(t)
+    amp.gain.setValueAtTime(0, t)
+    amp.gain.linearRampToValueAtTime(0.9, t + 0.03)
+    amp.gain.linearRampToValueAtTime(0.55, t + 0.2)
+    amp.gain.linearRampToValueAtTime(0, t + 0.5)
+  }
+
+  return {
+    get hz() {
+      return hz
+    },
+    setParams({ pitch }, t = ctx.currentTime) {
+      hz = 300 + 440 * pitch
+      // A cat just keeps meowing; the mouth only bends the pitch.
+      if (t >= nextAt) {
+        meow(t, pitch)
+        nextAt = t + 1.05 + Math.random() * 0.3
+      }
+    },
+    dispose() {
+      osc.stop()
+    },
+  }
+}
+
+/**
+ * A bark: three short bursts of noise through a low band, each with a fast
+ * pitch drop. "waw waw waw" on every mouth opening.
+ */
+const createBark: Instrument['create'] = (ctx, dest) => {
+  const out = ctx.createGain()
+  out.connect(dest)
+
+  const noise = noiseSource(ctx, 1)
+  const bp = ctx.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.value = 700
+  bp.Q.value = 1.2
+  const amp = ctx.createGain()
+  amp.gain.value = 0
+  noise.connect(bp).connect(amp).connect(out)
+  noise.start()
+
+  const sub = ctx.createOscillator()
+  sub.type = 'sawtooth'
+  sub.frequency.value = 160
+  const subAmp = ctx.createGain()
+  subAmp.gain.value = 0
+  sub.connect(subAmp).connect(out)
+  sub.start()
+
+  let hz = 160
+  let nextBark = 0
+
+  const bark = (t: number, pitch: number) => {
+    const f = 150 + 120 * pitch
+    bp.frequency.cancelScheduledValues(t)
+    bp.frequency.setValueAtTime(f * 2.2, t)
+    bp.frequency.exponentialRampToValueAtTime(f, t + 0.1)
+    amp.gain.cancelScheduledValues(t)
+    amp.gain.setValueAtTime(0, t)
+    amp.gain.linearRampToValueAtTime(1.1, t + 0.012)
+    amp.gain.exponentialRampToValueAtTime(0.001, t + 0.16)
+
+    sub.frequency.cancelScheduledValues(t)
+    sub.frequency.setValueAtTime(f * 1.4, t)
+    sub.frequency.exponentialRampToValueAtTime(f * 0.7, t + 0.14)
+    subAmp.gain.cancelScheduledValues(t)
+    subAmp.gain.setValueAtTime(0, t)
+    subAmp.gain.linearRampToValueAtTime(0.7, t + 0.012)
+    subAmp.gain.exponentialRampToValueAtTime(0.001, t + 0.15)
+  }
+
+  return {
+    get hz() {
+      return hz
+    },
+    setParams({ pitch }, t = ctx.currentTime) {
+      hz = 150 + 120 * pitch
+      // "waw waw waw" on its own schedule, three barks at a time.
+      if (t >= nextBark) {
+        for (let i = 0; i < 3; i++) bark(t + i * 0.26, pitch)
+        nextBark = t + 3 * 0.26 + 0.9
+      }
+    },
+    dispose() {
+      noise.stop()
+      sub.stop()
+    },
+  }
+}
+
+const NOTE: Record<string, number> = {
+  C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23,
+  G4: 392.0, A4: 440.0, B4: 493.88, C5: 523.25,
+}
+
+/**
+ * Baby shark, in the loosest sense: an approximation of the riff, not a
+ * transcription. A lookahead scheduler queues notes slightly ahead of the audio
+ * clock, because setTimeout alone is too jittery to keep a beat.
+ */
+const createBabyShark: Instrument['create'] = (ctx, dest) => {
+  const out = ctx.createGain()
+  out.connect(dest)
+  const lead = ctx.createGain()
+  lead.gain.value = 0.5
+  lead.connect(out)
+  const bass = ctx.createGain()
+  bass.gain.value = 0.35
+  bass.connect(out)
+
+  const MELODY = ['C4', 'C4', 'D4', 'E4', 'E4', 'D4', 'C4', 'D4']
+  const BASS = ['C4', 'G4', 'C4', 'G4']
+  const STEP = 0.19 // eighth notes
+  let index = 0
+  let nextTime = ctx.currentTime + 0.1
+  let timer: number | null = null
+  let hz = NOTE.C4
+
+  const blip = (freq: number, at: number, target: GainNode, type: OscillatorType, len: number) => {
+    const osc = ctx.createOscillator()
+    osc.type = type
+    osc.frequency.value = freq
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0, at)
+    g.gain.linearRampToValueAtTime(1, at + 0.01)
+    g.gain.exponentialRampToValueAtTime(0.001, at + len)
+    osc.connect(g).connect(target)
+    osc.start(at)
+    osc.stop(at + len + 0.05)
+  }
+
+  const pump = () => {
+    while (nextTime < ctx.currentTime + 0.3) {
+      const note = MELODY[index % MELODY.length]
+      hz = NOTE[note]
+      blip(hz, nextTime, lead, 'triangle', 0.16)
+      // a bass note every two steps, for the bounce
+      if (index % 2 === 0) {
+        blip(NOTE[BASS[(index / 2) % BASS.length]] / 2, nextTime, bass, 'sine', 0.24)
+      }
+      index++
+      nextTime += STEP
+    }
+    timer = window.setTimeout(pump, 60)
+  }
+  pump()
+
+  return {
+    get hz() {
+      return hz
+    },
+    setParams() {
+      /* the loop runs itself; the mouth does not gate it */
+    },
+    dispose() {
+      if (timer !== null) window.clearTimeout(timer)
+    },
+  }
+}
+
+const petInstrument = (
+  id: string,
+  label: string,
+  blurb: string,
+  create: Instrument['create'],
+  level: number,
+  alwaysOn = false,
+): Instrument => ({ id, label, blurb, create, level, releaseMs: 200, alwaysOn })
+
+export const PET_INSTRUMENTS: Record<'cat' | 'dog' | 'baby', Instrument> = {
+  cat: petInstrument('pet-cat', 'Cat', 'miaw miaw miaw', createMeow, 1.3, true),
+  dog: petInstrument('pet-dog', 'Dog', 'waw waw waw', createBark, 1.1, true),
+  baby: petInstrument('pet-baby', 'Tiny human', 'baby shark', createBabyShark, 1.6, true),
+}
+
+/** Whether this instrument should keep sounding while the mouth is shut. */
+export function isAlwaysOn(instrument: Instrument) {
+  return instrument.alwaysOn === true
+}
+
+/* ------------------------------------------------------------------- choir */
+
+/**
+ * A choir is several voices, slightly out of tune with each other, singing the
+ * same vowel. Detuned saws give the beating, a slow chorus LFO keeps it moving,
+ * and the formants follow the mouth so the vowel changes.
+ */
+const createChoir: Instrument['create'] = (ctx, dest) => {
+  const out = ctx.createGain()
+  out.connect(dest)
+  const input = ctx.createGain()
+
+  const bands = [650, 1150, 2500].map((hz, i) => {
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = hz
+    bp.Q.value = [4, 5, 6][i]
+    const g = ctx.createGain()
+    g.gain.value = [1, 0.7, 0.35][i]
+    input.connect(bp).connect(g).connect(out)
+    return { bp, g }
+  })
+
+  // Four voices: detune spread gives the "many people" chorus.
+  const DETUNE = [-9, -3, 4, 11]
+  const oscs = DETUNE.map((cents) => {
+    const osc = ctx.createOscillator()
+    osc.type = 'sawtooth'
+    osc.detune.value = cents
+    osc.frequency.value = 220
+    osc.connect(input)
+    osc.start()
+    return osc
+  })
+
+  // Slow drift so the chord never sits perfectly still.
+  const drift = ctx.createOscillator()
+  drift.type = 'sine'
+  drift.frequency.value = 0.23
+  const driftDepth = ctx.createGain()
+  driftDepth.gain.value = 6
+  drift.connect(driftDepth)
+  oscs.forEach((o) => driftDepth.connect(o.detune))
+  drift.start()
+
+  const vib = ctx.createOscillator()
+  vib.type = 'sine'
+  vib.frequency.value = 5.1
+  const vibDepth = ctx.createGain()
+  vibDepth.gain.value = 7
+  vib.connect(vibDepth)
+  oscs.forEach((o) => vibDepth.connect(o.detune))
+  vib.start()
+
+  let hz = 220
+
+  return {
+    get hz() {
+      return hz
+    },
+    setParams({ pitch, bright, round }, t = ctx.currentTime) {
+      hz = 174 + 320 * ease(pitch) // F3 → ~A4
+      // Voices glide, they do not jump to a note.
+      oscs.forEach((o) => o.frequency.setTargetAtTime(hz, t, 0.12))
+      vibDepth.gain.setTargetAtTime(5 + 14 * pitch, t, 0.2)
+      const f1 = 480 + 320 * bright
+      const f2 = clamp(760 + 1400 * bright - 520 * round, 600, 2400)
+      const f3 = 2400 + 500 * bright
+      bands[0].bp.frequency.setTargetAtTime(f1, t, 0.08)
+      bands[1].bp.frequency.setTargetAtTime(f2, t, 0.08)
+      bands[2].bp.frequency.setTargetAtTime(f3, t, 0.08)
+      bands[1].g.gain.setTargetAtTime(0.7 * (0.55 + 0.45 * bright), t, 0.08)
+    },
+    dispose() {
+      oscs.forEach((o) => o.stop())
+      drift.stop()
+      vib.stop()
+    },
+  }
+}
+
+/* ------------------------------------------------------------------- organ */
+
+/** Drawbar levels for harmonics 1, 2, 3, 4, 6, 8 — a small combo organ. */
+const DRAWBARS = [
+  { mult: 1, gain: 1 },
+  { mult: 2, gain: 0.65 },
+  { mult: 3, gain: 0.45 },
+  { mult: 4, gain: 0.3 },
+  { mult: 6, gain: 0.18 },
+  { mult: 8, gain: 0.1 },
+]
+
+/**
+ * Additive sines, one per drawbar, with a fast attack and a slow rotary
+ * tremolo. An organ is the easiest instrument to fake convincingly, because it
+ * really is just stacked sines.
+ */
+const createOrgan: Instrument['create'] = (ctx, dest) => {
+  const out = ctx.createGain()
+  out.connect(dest)
+
+  const bars = DRAWBARS.map(({ mult, gain }) => {
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.value = 220 * mult
+    const g = ctx.createGain()
+    g.gain.value = gain
+    osc.connect(g).connect(out)
+    osc.start()
+    return { osc, g, mult, base: gain }
+  })
+
+  // Leslie-ish: amplitude wobble plus a touch of pitch, at different rates.
+  const rotary = ctx.createOscillator()
+  rotary.type = 'sine'
+  rotary.frequency.value = 5.6
+  const ampDepth = ctx.createGain()
+  ampDepth.gain.value = 0.12
+  rotary.connect(ampDepth).connect(out.gain)
+  const pitchDepth = ctx.createGain()
+  pitchDepth.gain.value = 3
+  rotary.connect(pitchDepth)
+  bars.forEach((b) => pitchDepth.connect(b.osc.detune))
+  rotary.start()
+
+  let hz = 220
+
+  return {
+    get hz() {
+      return hz
+    },
+    setParams({ pitch, bright }, t = ctx.currentTime) {
+      hz = 130 + 300 * ease(pitch)
+      for (const bar of bars) {
+        bar.osc.frequency.setTargetAtTime(hz * bar.mult, t, 0.02)
+        // Pulling the upper drawbars in brightens it, like a real organ.
+        bar.g.gain.setTargetAtTime(bar.base * (bar.mult === 1 ? 1 : 0.35 + 0.9 * bright), t, 0.05)
+      }
+    },
+    dispose() {
+      bars.forEach((b) => b.osc.stop())
+      rotary.stop()
+    },
+  }
+}
+
 export const INSTRUMENTS: Instrument[] = [
   {
     id: 'singer',
@@ -494,11 +891,28 @@ export const INSTRUMENTS: Instrument[] = [
     level: 3.5,
   },
   {
+    id: 'choir',
+    label: 'Choir',
+    blurb: 'Four detuned voices on one vowel, slow to bloom.',
+    create: createChoir,
+    level: 1.5,
+    attackMs: 260,
+  },
+  {
+    id: 'organ',
+    label: 'Organ',
+    blurb: 'Stacked drawbars with a rotary wobble.',
+    create: createOrgan,
+    level: 1.1,
+    attackMs: 30,
+  },
+  {
     id: 'guitar',
     label: 'Guitar',
-    blurb: 'Plucked string: strums when you open, bends while you hold.',
+    blurb: 'Wah guitar: strums when you open, filter sweeps on every note.',
     create: createGuitar,
-    level: 1.25,
+    // the wah filter eats a lot of the pluck, so it needs a bigger trim
+    level: 2.6,
     releaseMs: 300,
   },
 ]

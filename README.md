@@ -142,6 +142,25 @@ Two details that the model's own output does not get right:
 The hand model runs on every second frame. Running both models on every frame cost more than
 half the frame rate for no benefit, since the wah is smoothed anyway.
 
+### Pet mode
+
+Bring a cat or a dog to the camera and the instrument is replaced by that animal's voice: **miaw
+miaw miaw** or **waw waw waw**. The indicator sits under the mute button and lights up when one
+turns up. It is not a control; hover it and it says *bring your pet to unlock*, with the small print
+*[\*pets include tiny humans]*.
+
+Cats and dogs come from MediaPipe's COCO object detector. Cats are reliable (0.77–0.82 in testing).
+Dogs are mostly reliable — a clear retriever scores 0.9, but a fluffy one can come back as "bear"
+(0.45) and a dog held by a person only scores 0.17. A detection has to hold for four frames to be
+trusted and stay gone for ten, so it does not flicker.
+
+**Tiny humans are inferred, not detected.** There is no baby class in COCO, and face geometry does
+not separate them: eye separation over face height measures 0.51–0.70 for babies against 0.48–0.61
+for adults, which overlaps badly. So the app looks for the cue that does hold — **a small face next
+to a big one**, i.e. somebody holding a baby up to the camera (ratio above 1.55), or a single face
+with unusually wide eyes. A baby on its own may therefore be missed. When it fires, baby shark
+plays as a loop rather than a mouth sound.
+
 ### Making the sound
 
 Five voices in `src/lib/instruments.ts`, all built from Web Audio primitives:
@@ -152,7 +171,9 @@ Five voices in `src/lib/instruments.ts`, all built from Web Audio primitives:
 | **Violin** | bowed saw pair, resonant lowpass, two body resonances, bow noise |
 | **Theremin** | sines: a fundamental plus harmonics that grow with brightness, sub-octave as it rounds |
 | **Kazoo** | saw through a tight buzzing bandpass, with heavy wobble |
-| **Guitar** | Karplus–Strong pluck: a noise burst in a damped delay line, strummed by the mouth and re-fretted while it rings |
+| **Choir** | four sawtooths detuned against each other, one vowel, slow to bloom |
+| **Organ** | six sines as drawbars with a rotary tremolo |
+| **Guitar** | **wah guitar**: Karplus–Strong pluck into a resonant filter that sweeps down on every note |
 
 Audio engages from **openness 0.22** — a slight parting is enough to sing. A resting face still
 measures 0.00, so a closed mouth stays properly silent.
@@ -197,6 +218,10 @@ every second, and both models fall back to a CPU delegate if the GPU one is reje
 | wah sweep range, squelch range | `WAH_LOW_HZ`, `WAH_OCTAVES`, `SQUELCH_*` in `src/lib/audio.ts` |
 | which hand wins, how big a hand must be | `MIN_SIZE_RATIO` in `src/lib/hands.ts` |
 | hand update rate | `HANDS_EVERY` in `src/App.tsx` |
+| how sure a pet detection must be | `PET_SCORE` in `src/lib/pets.ts` |
+| baby cues (face size ratio / eye ratio) | `BABY_SIZE_RATIO`, `BABY_EYES` in `src/lib/pets.ts` |
+| pet flicker damping | `PetStabiliser` frame counts in `src/lib/pets.ts` |
+| how often pets are checked | `PET_EVERY` in `src/App.tsx` |
 | pitch range, timbre mapping | each voice in `src/lib/instruments.ts` |
 | relative loudness | `level` on each entry in `INSTRUMENTS` |
 | how long a note rings after you close | `releaseMs` (used by the guitar) |
@@ -239,7 +264,12 @@ every second, and both models fall back to a CPU delegate if the GPU one is reje
   the frame: hand low → 250 Hz (dark), hand raised → 2.6 kHz (bright).
 - Frame rate with both models, software-rendered headless Chromium: 60 fps face-only, 31 fps with
   hands on every second frame. Real hardware with the GPU delegate is faster, but the 2× cost of
-  the second model is real.
+  the second model is real. The object detector runs on every sixth frame, so pet mode is close to
+  free.
+- Pet mode driven by synthetic camera feeds: a cat photo → **cat**, a retriever → **dog**, an adult
+  portrait → **none**, an adult holding a baby (faces 0.365 and 0.218 of frame height) → **baby**.
+- All seven instruments rendered offline: silent when the mouth is shut, pitch tracks the width
+  axis across their full range, and each gets brighter as `bright` rises.
 
 - Volume rendered through the real engine against mouth opening, at a fixed pitch:
 

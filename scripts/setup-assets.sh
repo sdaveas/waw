@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 
 FACE_MODEL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 HAND_MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+OBJECT_MODEL="https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite"
 
 mkdir -p public/models public/wasm
 
@@ -17,6 +18,11 @@ fi
 if [ ! -f public/models/hand_landmarker.task ]; then
   echo "→ downloading hand_landmarker.task (7.5 MB)"
   curl -sSL -o public/models/hand_landmarker.task "$HAND_MODEL"
+fi
+
+if [ ! -f public/models/efficientdet_lite0.tflite ]; then
+  echo "→ downloading efficientdet_lite0.tflite (6.9 MB)"
+  curl -sSL -o public/models/efficientdet_lite0.tflite "$OBJECT_MODEL"
 fi
 
 echo "→ copying MediaPipe wasm runtime"

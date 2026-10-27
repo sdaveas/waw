@@ -10,10 +10,12 @@
 import {
   DEFAULT_INSTRUMENT,
   getInstrument,
+  PET_INSTRUMENTS,
   type Instrument,
   type VoiceParams,
   type Voice,
 } from './instruments'
+import type { PetKind } from './pets'
 
 /**
  * How far the mouth must open before anything sounds. Low enough that a slight
@@ -51,7 +53,11 @@ export class WaaawEngine {
   private master: GainNode | null = null
   private voiceGain: GainNode | null = null
   private voice: Voice | null = null
+  /** The instrument the player chose, which pet mode temporarily overrides. */
+  private manual: Instrument
   private instrument: Instrument
+  private petKind: PetKind = null
+  private muted = false
   private params: VoiceParams = { pitch: 0, bright: 0, round: 0, drive: 0, voiced: false }
   private spawnToken = 0
   private echo = 0
@@ -67,7 +73,8 @@ export class WaaawEngine {
    *                     real graph headlessly. Production omits it.
    */
   constructor(instrumentId: string = DEFAULT_INSTRUMENT, injectedCtx?: AudioContext) {
-    this.instrument = getInstrument(instrumentId)
+    this.manual = getInstrument(instrumentId)
+    this.instrument = this.manual
     this.injected = injectedCtx
   }
 
@@ -227,7 +234,25 @@ export class WaaawEngine {
 
   /** Swap instruments without a click: fade out, rebuild, fade in. */
   setInstrument(instrumentId: string) {
-    const next = getInstrument(instrumentId)
+    this.manual = getInstrument(instrumentId)
+    // While a pet is on camera it keeps the stage; the choice is remembered for
+    // when it leaves.
+    if (this.petKind) return
+    this.swapTo(this.manual)
+  }
+
+  /** Pet mode replaces the instrument entirely, and restores it on exit. */
+  setPet(kind: PetKind) {
+    if (kind === this.petKind) return
+    this.petKind = kind
+    this.swapTo(kind ? PET_INSTRUMENTS[kind] : this.manual)
+  }
+
+  get pet() {
+    return this.petKind
+  }
+
+  private swapTo(next: Instrument) {
     if (next.id === this.instrument.id) return
     this.instrument = next
     if (!this.ctx) return
@@ -236,6 +261,10 @@ export class WaaawEngine {
     window.setTimeout(() => {
       if (token === this.spawnToken) this.spawn()
     }, 170)
+  }
+
+  setMuted(muted: boolean) {
+    this.muted = muted
   }
 
   /**
@@ -269,6 +298,19 @@ export class WaaawEngine {
     if (!master) return
     const t = ctx.currentTime
     const release = this.instrument.releaseMs ? this.instrument.releaseMs / 1000 : 0.04
+    const trim = this.instrument.level ?? 1
+
+    if (this.muted) {
+      master.gain.setTargetAtTime(0, t, 0.03)
+      return
+    }
+    // Pets make their own noise while they are on camera; the mouth rides on
+    // top instead of gating it.
+    if (this.instrument.alwaysOn) {
+      const ride = 0.4 + 0.6 * Math.pow(Math.min(1, this.params.drive), 0.7)
+      master.gain.setTargetAtTime(LEVEL_MAX * trim * ride, t, (this.instrument.attackMs ?? 80) / 1000)
+      return
+    }
     if (!voiced) {
       master.gain.setTargetAtTime(0, t, release)
       return
@@ -277,9 +319,9 @@ export class WaaawEngine {
     // mouth is an actual crescendo instead of a step to near-full volume.
     const amount = Math.max(0, (drive - GATE) / (1 - GATE))
     const level =
-      (LEVEL_MIN + (LEVEL_MAX - LEVEL_MIN) * Math.pow(amount, LEVEL_CURVE)) *
-      (this.instrument.level ?? 1)
-    master.gain.setTargetAtTime(level, t, 0.02)
+      (LEVEL_MIN + (LEVEL_MAX - LEVEL_MIN) * Math.pow(amount, LEVEL_CURVE)) * trim
+    const attack = (this.instrument.attackMs ?? 20) / 1000
+    master.gain.setTargetAtTime(level, t, attack)
   }
 
   /**

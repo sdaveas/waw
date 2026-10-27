@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { FaceLandmarker, HandLandmarker } from '@mediapipe/tasks-vision'
+import type { FaceLandmarker, HandLandmarker, ObjectDetector } from '@mediapipe/tasks-vision'
 import { GATE, WaaawEngine } from './lib/audio'
 import { INSTRUMENTS, DEFAULT_INSTRUMENT } from './lib/instruments'
 import { readFace, smoothMouth, smoothTone } from './lib/face'
 import { HAND_CONNECTIONS, readHands, smoothHand, type HandState } from './lib/hands'
-import { getHandLandmarker, getLandmarker } from './lib/tracker'
+import { detectPet, PetStabiliser, type PetKind } from './lib/pets'
+import { getHandLandmarker, getLandmarker, getObjectDetector } from './lib/tracker'
 
 type Status = 'idle' | 'loading' | 'running' | 'error'
-
-const ZERO = { open: 0, wide: 0, round: 0, eyes: 0 }
 
 /**
  * The hand model is roughly as expensive as the face model, and running both
@@ -16,6 +15,15 @@ const ZERO = { open: 0, wide: 0, round: 0, eyes: 0 }
  * on every other frame and the last result is reused in between.
  */
 const HANDS_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 3 : 2
+
+/** The object detector is a third model; it runs on a slower cadence. */
+const PET_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 9 : 6
+
+const PET_DETAIL: Record<'cat' | 'dog' | 'baby', string> = {
+  cat: 'miaw miaw miaw',
+  dog: 'waw waw waw',
+  baby: 'baby shark',
+}
 
 /** Phones get a smaller capture and a lighter model load. */
 const IS_TOUCH = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0
@@ -46,6 +54,8 @@ export default function App() {
   const wahRefValue = useRef(0)
   const squelchRef = useRef(0)
   const frameCountRef = useRef(0)
+  const objectDetectorRef = useRef<ObjectDetector | null>(null)
+  const stabiliserRef = useRef(new PetStabiliser())
   const lastHandsRef = useRef<HandState | null>(null)
   const mutedRef = useRef(false)
   const lastTsRef = useRef(0)
@@ -54,6 +64,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
   const [audioState, setAudioState] = useState<AudioContextState | 'none'>('none')
+  const [pet, setPet] = useState<PetKind>(null)
   const [instrumentId, setInstrumentId] = useState(DEFAULT_INSTRUMENT)
 
   const teardown = useCallback(() => {
@@ -95,7 +106,7 @@ export default function App() {
   const toggleMute = () => {
     mutedRef.current = !mutedRef.current
     setMuted(mutedRef.current)
-    if (mutedRef.current) engineRef.current?.setFace(ZERO)
+    engineRef.current?.setMuted(mutedRef.current)
   }
 
   const pickInstrument = (id: string) => {
@@ -117,9 +128,10 @@ export default function App() {
     const audioReady = engine.start()
 
     try {
-      const [landmarker, handLandmarker, stream] = await Promise.all([
+      const [landmarker, handLandmarker, objectDetector, stream] = await Promise.all([
         getLandmarker(),
         getHandLandmarker(),
+        getObjectDetector(),
         navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: 'user',
@@ -131,6 +143,7 @@ export default function App() {
       ])
       landmarkerRef.current = landmarker
       handLandmarkerRef.current = handLandmarker
+      objectDetectorRef.current = objectDetector
       streamRef.current = stream
 
       const video = videoRef.current
@@ -179,15 +192,46 @@ export default function App() {
 
     let face = null
     let handState = null
+    // One face pass per frame: the model must not be handed the same timestamp
+    // twice, and pet mode needs every face, not just the first.
+    let faces: Array<NonNullable<ReturnType<typeof readFace>>> = []
     try {
       const result = landmarker.detectForVideo(video, ts)
-      const landmarks = result.faceLandmarks?.[0]
-      if (landmarks) face = readFace(landmarks, video.videoWidth, video.videoHeight)
+      faces = (result.faceLandmarks ?? [])
+        .map((lm) => readFace(lm, video.videoWidth, video.videoHeight))
+        .filter((f): f is NonNullable<typeof f> => f !== null)
+      // The mouth follows whichever face is closest to the camera.
+      face = faces.reduce<(typeof faces)[number] | null>(
+        (best, f) => (!best || f.heightRatio > best.heightRatio ? f : best),
+        null,
+      )
     } catch {
       /* a dropped frame is not fatal */
     }
 
     frameCountRef.current++
+
+    if (objectDetectorRef.current && frameCountRef.current % PET_EVERY === 0) {
+      try {
+        const found = objectDetectorRef.current.detectForVideo(video, ts)
+        const objects = (found.detections ?? []).map((d) => ({
+          label: d.categories[0]?.categoryName ?? '',
+          score: d.categories[0]?.score ?? 0,
+        }))
+        const kind = stabiliserRef.current.update(
+          detectPet({
+            objects,
+            faceHeights: faces.map((f) => f.heightRatio),
+            eyesOverFaceH: face?.eyesOverFaceH ?? 0,
+          }),
+        )
+        engineRef.current?.setPet(kind)
+        setPet(kind)
+      } catch {
+        /* pet detection is optional */
+      }
+    }
+
     if (handLandmarkerRef.current && frameCountRef.current % HANDS_EVERY === 0) {
       try {
         const hands = handLandmarkerRef.current.detectForVideo(video, ts)
@@ -218,7 +262,8 @@ export default function App() {
     squelchRef.current = squelch
 
     const engine = engineRef.current
-    engine?.setFace(mutedRef.current ? ZERO : { open, wide, round, eyes })
+    engine?.setMuted(mutedRef.current)
+    engine?.setFace({ open, wide, round, eyes })
     engine?.setHands(wah, squelch, Boolean(handState?.present))
 
     // --- paint ---
@@ -398,13 +443,33 @@ export default function App() {
         )}
 
         {status === 'running' && (
-          <button
-            onClick={toggleMute}
-            data-audio-state={audioState}
-            className="absolute top-3 right-3 rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-paper/80 backdrop-blur transition hover:bg-black/70"
-          >
-            {muted ? 'unmute' : 'mute'}
-          </button>
+          <div className="absolute top-3 right-3 flex flex-col items-end gap-2">
+            <button
+              onClick={toggleMute}
+              data-audio-state={audioState}
+              className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-paper/80 backdrop-blur transition hover:bg-black/70"
+            >
+              {muted ? 'unmute' : 'mute'}
+            </button>
+
+            {/* Not a control: it lights up when a pet turns up. */}
+            <div
+              data-pet={pet ?? 'none'}
+              className={`group relative rounded-full px-3 py-1.5 text-xs font-medium backdrop-blur transition-colors ${
+                pet
+                  ? 'bg-amber-400/90 text-ink'
+                  : 'bg-black/50 text-paper/50'
+              }`}
+            >
+              <span>pet mode{pet ? ` · ${pet === 'baby' ? 'tiny human' : pet}` : ''}</span>
+              <div className="pointer-events-none invisible absolute right-0 top-full mt-2 w-52 rounded-xl bg-ink/95 p-3 text-left opacity-0 ring-1 ring-white/10 transition group-hover:visible group-hover:opacity-100">
+                <p className="text-xs text-paper/80">
+                  {pet ? `${PET_DETAIL[pet]} engaged` : 'bring your pet to unlock'}
+                </p>
+                <p className="mt-1 text-[11px] text-paper/40">[*pets include tiny humans]</p>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
