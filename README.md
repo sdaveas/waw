@@ -114,11 +114,12 @@ a two-line change:
 | face | drives |
 | --- | --- |
 | `open` (vertical opening) | **volume**, and brightness — more open is brighter |
-| `wide` (horizontal stretch) | **pitch** |
+| `wide` (horizontal stretch) | **pitch** — but only when no hand is up |
 | `round` (aspect ratio) | darkens: lower F2, a sub-octave, a tighter buzz |
 | `eyes` (eyelid aperture) | **echo** — a feedback delay |
-| hand height | **wah** — sweeps a resonant lowpass from 250 Hz to 8 kHz |
-| second hand height | **squelch** — the wah's resonance, Q 0.7 to 11 |
+| hand height | **pitch** — takes over from mouth width when a hand is in frame |
+| second hand height | **octave**, in five zones from −2 to +2 |
+| `wide` again | also sweeps the wah filter (250 Hz to 8 kHz) |
 
 Volume is likewise gated on `open`, so the two mouth axes stay independent: opening your mouth is
 a crescendo and stretching it is a pitch bend.
@@ -140,6 +141,9 @@ Two details that the model's own output does not get right:
   (45 px). The biggest hand drives the wah; anything under 3.5% of the frame width is ignored.
 - **Handedness is not used for the roles.** MediaPipe derives it from a mirrored image, so it
   flips with the camera. "Closest hand sweeps, other hand squelches" is unambiguous.
+
+Octave zones are sticky on purpose: a hand resting on a boundary would otherwise flip octaves
+every frame, so the height has to clear the boundary by 4% before the octave changes.
 
 The hand model runs on every second frame. Running both models on every frame cost more than
 half the frame rate for no benefit, since the wah is smoothed anyway.

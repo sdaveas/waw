@@ -3,7 +3,13 @@ import type { FaceLandmarker, HandLandmarker, ObjectDetector } from '@mediapipe/
 import { GATE, WaaawEngine } from './lib/audio'
 import { INSTRUMENTS, DEFAULT_INSTRUMENT } from './lib/instruments'
 import { readFace, smoothMouth, smoothTone } from './lib/face'
-import { HAND_CONNECTIONS, readHands, smoothHand, type HandState } from './lib/hands'
+import {
+  HAND_CONNECTIONS,
+  readHands,
+  smoothHand,
+  stableOctave,
+  type HandState,
+} from './lib/hands'
 import { detectPet, PetStabiliser, type PetKind } from './lib/pets'
 import { getHandLandmarker, getLandmarker, getObjectDetector } from './lib/tracker'
 
@@ -51,8 +57,8 @@ export default function App() {
   const wideRef = useRef(0)
   const roundRef = useRef(0)
   const eyesRef = useRef(0)
-  const wahRefValue = useRef(0)
-  const squelchRef = useRef(0)
+  const handPitchRef = useRef(0)
+  const octaveRef = useRef(0)
   const frameCountRef = useRef(0)
   const objectDetectorRef = useRef<ObjectDetector | null>(null)
   const stabiliserRef = useRef(new PetStabiliser())
@@ -78,8 +84,8 @@ export default function App() {
     wideRef.current = 0
     roundRef.current = 0
     eyesRef.current = 0
-    wahRefValue.current = 0
-    squelchRef.current = 0
+    handPitchRef.current = 0
+    octaveRef.current = 0
   }, [])
 
   useEffect(() => teardown, [teardown])
@@ -256,15 +262,19 @@ export default function App() {
     roundRef.current = round
     eyesRef.current = eyes
 
-    const wah = smoothHand(wahRefValue.current, handState?.wah ?? 0)
-    const squelch = smoothHand(squelchRef.current, handState?.squelch ?? 0)
-    wahRefValue.current = wah
-    squelchRef.current = squelch
+    const handPitch = smoothHand(handPitchRef.current, handState?.pitch ?? 0)
+    // the octave comes from the *second* hand, not the one playing the pitch
+    const octave =
+      handState?.octaveHeight != null
+        ? stableOctave(handState.octaveHeight, octaveRef.current)
+        : 0
+    handPitchRef.current = handPitch
+    octaveRef.current = octave
 
     const engine = engineRef.current
     engine?.setMuted(mutedRef.current)
     engine?.setFace({ open, wide, round, eyes })
-    engine?.setHands(wah, squelch, Boolean(handState?.present))
+    engine?.setHands(handPitch, octave, Boolean(handState?.present))
 
     // --- paint ---
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -317,7 +327,7 @@ export default function App() {
       ctx.strokeStyle = 'rgba(52 211 153 / 0.75)'
       ctx.fillStyle = 'rgba(52 211 153 / 0.9)'
       ctx.shadowColor = 'rgba(52 211 153 / 0.8)'
-      ctx.shadowBlur = 8 + 22 * wah
+      ctx.shadowBlur = 8 + 22 * handPitch
       ctx.lineWidth = Math.max(1, 2 * scale)
       for (const hand of handState.hands) {
         for (const [a, b] of HAND_CONNECTIONS) {
@@ -341,15 +351,14 @@ export default function App() {
         engine && engine.voiced && !mutedRef.current ? `${Math.round(engine.hz)} Hz` : 'silent'
     }
     if (wahBarRef.current) {
-      wahBarRef.current.style.width = `${Math.round(handState?.present ? wah * 100 : 0)}%`
+      wahBarRef.current.style.width = `${Math.round(handState?.present ? handPitch * 100 : 0)}%`
     }
     if (wahRef.current) {
       if (!handState?.present) {
         wahRef.current.textContent = 'no hands'
       } else {
-        const hz = engine?.wahHz ?? 0
-        const shown = hz >= 1000 ? `${(hz / 1000).toFixed(1)} kHz` : `${Math.round(hz)} Hz`
-        wahRef.current.textContent = `${shown} · Q ${(0.7 + 10.3 * squelch).toFixed(1)}`
+        const sign = octave > 0 ? `+${octave}` : `${octave}`
+        wahRef.current.textContent = `octave ${sign}${handState?.hasOctaveHand ? '' : ' (single)'}`
       }
     }
   }
@@ -516,7 +525,7 @@ export default function App() {
         </div>
 
         <div className="flex items-center justify-between text-xs text-paper/40 font-mono pt-1">
-          <span>hands ↕ raised</span>
+          <span>hand ↕ pitch</span>
           <span ref={wahRef}>no hands</span>
         </div>
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
@@ -536,10 +545,8 @@ export default function App() {
       )}
 
       <p className="max-w-md text-center text-xs text-paper/35">
-        Opening the mouth vertically sets the volume (and brightens the tone; a pursed
-        &ldquo;:o&rdquo; darkens it). Stretching it sideways sets the pitch. Eyes opened wide add
-        echo. Raise a hand to sweep the wah, and a second hand sets the squelch. Nothing sings until
-        the open bar passes the marker.
+        Mouth open sets the volume. Raise a hand to play the pitch; a second hand picks the octave,
+        &plusmn;2. With no hand up, mouth width sets the pitch instead. Eyes wide add echo.
       </p>
     </main>
   )

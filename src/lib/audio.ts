@@ -63,6 +63,9 @@ export class WaaawEngine {
   private spawnToken = 0
   private echo = 0
   private wah: BiquadFilterNode | null = null
+  private handPitch: number | null = null
+  private handOctave = 0
+  private lastWide = 0
   private fxWet: GainNode | null = null
   private fxFeedback: GainNode | null = null
   private fxDamp: BiquadFilterNode | null = null
@@ -297,8 +300,11 @@ export class WaaawEngine {
     const drive = mouth.open
     const gate = this.instrument.gate ?? GATE
     const voiced = drive > gate
+    this.lastWide = mouth.wide
+    // A hand in frame owns the pitch; otherwise the mouth's stretch does.
     this.params = {
-      pitch: mouth.wide,
+      pitch: this.handPitch ?? mouth.wide,
+      octave: this.handOctave,
       bright: mouth.open,
       round: mouth.round,
       drive,
@@ -340,22 +346,22 @@ export class WaaawEngine {
   }
 
   /**
-   * Hands are the wah pedal: height sweeps the cutoff, the second hand sets the
-   * resonance. With no hand in frame the filter parks wide open and flat, so
-   * the app sounds exactly as it did before hands existed.
+   * One hand plays the pitch, a second picks the octave. With no hand in frame
+   * the mouth's stretch takes over the pitch, as it did before hands existed.
    */
-  setHands(wah: number, squelch: number, present: boolean) {
+  setHands(pitch: number, octave: number, present: boolean) {
+    this.handPitch = present ? pitch : null
+    this.handOctave = present ? octave : 0
+
+    // The filter they used to drive still earns its keep: it now follows how
+    // far the mouth is stretched, so opening wide brightens the tone.
     const ctx = this.ctx
     if (!ctx || !this.wah) return
     const t = ctx.currentTime
-    if (!present) {
-      this.wah.frequency.setTargetAtTime(WAH_OPEN_HZ, t, 0.1)
-      this.wah.Q.setTargetAtTime(SQUELCH_MIN, t, 0.1)
-      return
-    }
-    const hz = WAH_LOW_HZ * Math.pow(2, WAH_OCTAVES * Math.min(1, Math.max(0, wah)))
-    this.wah.frequency.setTargetAtTime(hz, t, 0.05)
-    this.wah.Q.setTargetAtTime(SQUELCH_MIN + (SQUELCH_MAX - SQUELCH_MIN) * squelch, t, 0.08)
+    const cutoff = this.lastWide
+    const hz = WAH_LOW_HZ * Math.pow(2, WAH_OCTAVES * Math.min(1, Math.max(0, cutoff)))
+    this.wah.frequency.setTargetAtTime(hz, t, 0.06)
+    this.wah.Q.setTargetAtTime(SQUELCH_MIN + (SQUELCH_MAX - SQUELCH_MIN) * 0.25, t, 0.1)
   }
 
   /** Cutoff in Hz, for the display. */

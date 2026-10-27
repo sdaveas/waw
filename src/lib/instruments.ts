@@ -20,6 +20,8 @@ import { getSample, PET_SAMPLES } from './samples'
 
 export type VoiceParams = {
   pitch: number
+  /** Whole octaves on top of the pitch, from the second hand. */
+  octave?: number
   bright: number
   round: number
   drive: number
@@ -56,6 +58,8 @@ export type Instrument = {
 
 const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v))
 const ease = (v: number) => Math.pow(v, 0.85)
+/** Octave shift as a frequency multiplier. */
+const oct = (o?: number) => Math.pow(2, o ?? 0)
 
 /** Shared helper: an oscillator pair plus a vibrato LFO. */
 function sawPair(ctx: AudioContext, input: AudioNode) {
@@ -153,8 +157,8 @@ const createSinger: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright, round, drive }, t = ctx.currentTime) {
-      hz = 92 + 208 * ease(pitch)
+    setParams({ pitch, bright, round, drive, octave }, t = ctx.currentTime) {
+      hz = (92 + 208 * ease(pitch)) * oct(octave)
       osc.setHz(hz, t)
       osc.depth.gain.setTargetAtTime(4 + 26 * pitch, t, 0.1)
       // F1 tracks how far the jaw dropped, F2 how bright the tone is; a pursed
@@ -221,8 +225,8 @@ const createViolin: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright, round, drive }, t = ctx.currentTime) {
-      hz = 196 + 464 * ease(pitch) // G3 → E5
+    setParams({ pitch, bright, round, drive, octave }, t = ctx.currentTime) {
+      hz = (196 + 464 * ease(pitch)) * oct(octave) // G3 → E5
       osc.setHz(hz, t)
       osc.depth.gain.setTargetAtTime(8 + 35 * pitch, t, 0.2)
       const tone = toneOf(bright, round, pitch)
@@ -296,8 +300,8 @@ const createTheremin: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright, round }, t = ctx.currentTime) {
-      hz = 130 + 750 * ease(pitch) // spooky range
+    setParams({ pitch, bright, round, octave }, t = ctx.currentTime) {
+      hz = (130 + 750 * ease(pitch)) * oct(octave) // spooky range
       // Long glide: a theremin slides, it does not snap.
       osc1.frequency.setTargetAtTime(hz, t, 0.09)
       sub.frequency.setTargetAtTime(hz / 2, t, 0.09)
@@ -351,8 +355,8 @@ const createKazoo: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright, round }, t = ctx.currentTime) {
-      hz = 110 + 240 * ease(pitch)
+    setParams({ pitch, bright, round, octave }, t = ctx.currentTime) {
+      hz = (110 + 240 * ease(pitch)) * oct(octave)
       osc.setHz(hz, t)
       osc.depth.gain.setTargetAtTime(20 + 45 * pitch, t, 0.12) // wobble hard
       const tone = toneOf(bright, round, pitch)
@@ -465,8 +469,8 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright, round, voiced }, t = ctx.currentTime) {
-      hz = 110 + 250 * ease(pitch) // A2 → ~D4
+    setParams({ pitch, bright, round, voiced, octave }, t = ctx.currentTime) {
+      hz = (110 + 250 * ease(pitch)) * oct(octave) // A2 → ~D4
       // Retune the string; ringing notes bend to follow the mouth.
       delay.delayTime.setTargetAtTime(1 / clamp(hz, 60, 900), t, 0.03)
       const tone = toneOf(bright, round, pitch)
@@ -957,8 +961,8 @@ const createChoir: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright, round }, t = ctx.currentTime) {
-      hz = 174 + 320 * ease(pitch) // F3 → ~A4
+    setParams({ pitch, bright, round, octave }, t = ctx.currentTime) {
+      hz = (174 + 320 * ease(pitch)) * oct(octave) // F3 → ~A4
       // Voices glide, they do not jump to a note.
       oscs.forEach((o) => o.frequency.setTargetAtTime(hz, t, 0.12))
       vibDepth.gain.setTargetAtTime(5 + 14 * pitch, t, 0.2)
@@ -1029,8 +1033,8 @@ const createOrgan: Instrument['create'] = (ctx, dest) => {
     get hz() {
       return hz
     },
-    setParams({ pitch, bright }, t = ctx.currentTime) {
-      hz = 130 + 300 * ease(pitch)
+    setParams({ pitch, bright, octave }, t = ctx.currentTime) {
+      hz = (130 + 300 * ease(pitch)) * oct(octave)
       for (const bar of bars) {
         bar.osc.frequency.setTargetAtTime(hz * bar.mult, t, 0.02)
         // Pulling the upper drawbars in brightens it, like a real organ.
