@@ -244,8 +244,11 @@ export class WaaawEngine {
   /** Pet mode replaces the instrument entirely, and restores it on exit. */
   setPet(kind: PetKind) {
     if (kind === this.petKind) return
+    const next = kind ? PET_INSTRUMENTS[kind] : this.manual
+    // An unknown pet must not take the whole engine down with it.
+    if (!next) return
     this.petKind = kind
-    this.swapTo(kind ? PET_INSTRUMENTS[kind] : this.manual)
+    this.swapTo(next)
   }
 
   get pet() {
@@ -281,7 +284,8 @@ export class WaaawEngine {
   setFace(mouth: MouthReading) {
     const ctx = this.ctx
     const drive = mouth.open
-    const voiced = drive > GATE
+    const gate = this.instrument.gate ?? GATE
+    const voiced = drive > gate
     this.params = {
       pitch: mouth.wide,
       bright: mouth.open,
@@ -317,7 +321,7 @@ export class WaaawEngine {
     }
     // Remap the usable range (gate → fully open) onto 0 → 1, so opening the
     // mouth is an actual crescendo instead of a step to near-full volume.
-    const amount = Math.max(0, (drive - GATE) / (1 - GATE))
+    const amount = Math.max(0, (drive - gate) / (1 - gate))
     const level =
       (LEVEL_MIN + (LEVEL_MAX - LEVEL_MIN) * Math.pow(amount, LEVEL_CURVE)) * trim
     const attack = (this.instrument.attackMs ?? 20) / 1000

@@ -44,6 +44,12 @@ export type Instrument = {
   alwaysOn?: boolean
   /** How long the level takes to arrive, in ms. Choirs bloom, organs snap. */
   attackMs?: number
+  /**
+   * How far the mouth must open before this voice sounds. Instruments use the
+   * global gate; pets need a lower one, because a small "niaw" is exactly what
+   * a slightly open mouth is for.
+   */
+  gate?: number
 }
 
 const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v))
@@ -494,11 +500,12 @@ const createGuitar: Instrument['create'] = (ctx, dest) => {
 /* -------------------------------------------------------------- pet voices */
 
 /**
- * A MIDI cat. The trick that makes it read as "MIDI" rather than "synth" is
- * that the pitch glide is quantised to semitones and stepped, the way an old
- * sound chip would do it, over a square wave with a nasal 1.9 kHz peak.
+ * A MIDI cat, driven by the mouth rather than a timer.
  *
- * Two syllables: "mi" (short, bright) then "aow" (gliding down).
+ * The mouth is the length of the sound: a quick blip gives a quick "niaw", and
+ * holding it open gives "niaaaaaaaaaaw". The glide is quantised to semitones
+ * and stepped, the way an old sound chip bends a note, which is what makes it
+ * read as MIDI rather than as a synth.
  */
 const createCatMeow: Instrument['create'] = (ctx, dest) => {
   const out = ctx.createGain()
@@ -523,7 +530,6 @@ const createCatMeow: Instrument['create'] = (ctx, dest) => {
   square.connect(input)
   square.start()
 
-  // An octave down on a triangle, for a bit of body under the buzz.
   const body = ctx.createOscillator()
   body.type = 'triangle'
   body.frequency.value = 300
@@ -541,66 +547,68 @@ const createCatMeow: Instrument['create'] = (ctx, dest) => {
   vibrato.type = 'sine'
   vibrato.frequency.value = 7.5
   const vibDepth = ctx.createGain()
-  vibDepth.gain.value = 55
+  vibDepth.gain.value = 46
   vibrato.connect(vibDepth)
   vibDepth.connect(square.frequency)
   vibrato.start()
 
   let hz = 600
-  let nextAt = 0
+  let onsetAt = -1
 
   const quantise = (f: number) => 440 * Math.pow(2, Math.round(12 * Math.log2(f / 440)) / 12)
 
-  const meow = (t: number, open: number) => {
-    const dur = 0.52
-    const base = 560 + 300 * open
+  /** u goes 0 → 1 over the glide, then holds at 1 while the mouth stays open. */
+  const shape = (u: number, base: number, t: number) => {
     const contour: Array<[number, number]> = [
-      [0, 1.06],
-      [0.14, 0.94],
-      [0.32, 1.26],
-      [0.62, 1.0],
-      [1, 0.6],
+      [0, 1.02],
+      [0.18, 0.92],
+      [0.45, 1.22],
+      [1, 1.0],
     ]
-    const at = (u: number) => {
+    const at = (x: number) => {
       for (let i = 1; i < contour.length; i++) {
-        const [u1, v1] = contour[i]
-        const [u0, v0] = contour[i - 1]
-        if (u <= u1) return v0 + ((v1 - v0) * (u - u0)) / (u1 - u0)
+        const [x1, v1] = contour[i]
+        const [x0, v0] = contour[i - 1]
+        if (x <= x1) return v0 + ((v1 - v0) * (x - x0)) / (x1 - x0)
       }
       return contour[contour.length - 1][1]
     }
-
-    // Stepped, quantised glide: this is the "MIDI" part.
-    const steps = 26
-    square.frequency.cancelScheduledValues(t)
-    body.frequency.cancelScheduledValues(t)
-    for (let i = 0; i < steps; i++) {
-      const u = i / (steps - 1)
-      const f = quantise(base * at(u))
-      square.frequency.setValueAtTime(f, t + u * dur)
-      body.frequency.setValueAtTime(f / 2, t + u * dur)
-    }
-    hz = base
-
-    // "mi" then "aow": two humps in the envelope.
-    amp.gain.cancelScheduledValues(t)
-    amp.gain.setValueAtTime(0, t)
-    amp.gain.linearRampToValueAtTime(0.85, t + 0.02)
-    amp.gain.linearRampToValueAtTime(0.5, t + 0.16)
-    amp.gain.linearRampToValueAtTime(0.95, t + 0.3)
-    amp.gain.linearRampToValueAtTime(0.4, t + 0.44)
-    amp.gain.exponentialRampToValueAtTime(0.001, t + dur + 0.06)
+    const f = quantise(base * at(Math.min(1, u)))
+    square.frequency.setTargetAtTime(f, t, 0.012)
+    body.frequency.setTargetAtTime(f / 2, t, 0.012)
+    hz = f
   }
 
   return {
     get hz() {
       return hz
     },
-    setParams({ pitch }, t = ctx.currentTime) {
-      hz = 560 + 300 * pitch
-      if (t >= nextAt) {
-        meow(t, pitch)
-        nextAt = t + 1.25 + Math.random() * 0.35
+    setParams({ bright, voiced }, t = ctx.currentTime) {
+      if (voiced) {
+        if (onsetAt < 0) {
+          // attack: the "n" of "niaw"
+          onsetAt = t
+          amp.gain.cancelScheduledValues(t)
+          amp.gain.setValueAtTime(0, t)
+          amp.gain.linearRampToValueAtTime(0.8, t + 0.03)
+          amp.gain.linearRampToValueAtTime(0.7, t + 0.12)
+        }
+        // How long the "iaaaaw" takes to unfold: a barely-open mouth gets a
+        // quick miaw, a wide one stretches it right out.
+        const glide = 0.22 + 1.5 * bright
+        const u = (t - onsetAt) / glide
+        shape(u, 470 + 360 * bright, t)
+        // sustain level while held
+        amp.gain.setTargetAtTime(0.72, t, 0.05)
+      } else if (onsetAt >= 0) {
+        // release: slide down into the "w"
+        onsetAt = -1
+        const drop = Math.max(80, hz * 0.62)
+        square.frequency.cancelScheduledValues(t)
+        square.frequency.setTargetAtTime(drop, t, 0.05)
+        body.frequency.setTargetAtTime(drop / 2, t, 0.05)
+        amp.gain.cancelScheduledValues(t)
+        amp.gain.setTargetAtTime(0, t, 0.07)
       }
     },
     dispose() {
@@ -612,9 +620,8 @@ const createCatMeow: Instrument['create'] = (ctx, dest) => {
 }
 
 /**
- * A dog howl: "awooooo". One long note rather than barks — the vowel slides
- * from "ah" to "oo" while the pitch rises and then sags away, with vibrato
- * creeping in as it goes.
+ * A dog howl, also mouth-driven: "aww" for a short opening, "aaawwwwwww" while
+ * held open. The vowel slides from "ah" to "oo" as the howl unfolds.
  */
 const createDogHowl: Instrument['create'] = (ctx, dest) => {
   const out = ctx.createGain()
@@ -666,54 +673,39 @@ const createDogHowl: Instrument['create'] = (ctx, dest) => {
   vibrato.start()
 
   let hz = 220
-  let nextAt = 0
-
-  const howl = (t: number, open: number) => {
-    const dur = 1.45
-    const f0 = 185 + 80 * open
-
-    saw.frequency.cancelScheduledValues(t)
-    saw.frequency.setValueAtTime(f0 * 0.85, t)
-    saw.frequency.linearRampToValueAtTime(f0 * 1.32, t + 0.32)
-    saw.frequency.linearRampToValueAtTime(f0 * 1.22, t + 0.95)
-    saw.frequency.linearRampToValueAtTime(f0 * 0.78, t + dur)
-    hz = f0
-
-    // "ah" → "oo": both formants slide down.
-    formants[0].frequency.cancelScheduledValues(t)
-    formants[0].frequency.setValueAtTime(780, t)
-    formants[0].frequency.linearRampToValueAtTime(330, t + dur * 0.85)
-    formants[1].frequency.cancelScheduledValues(t)
-    formants[1].frequency.setValueAtTime(1180, t)
-    formants[1].frequency.linearRampToValueAtTime(760, t + dur * 0.85)
-
-    vibrato.frequency.setValueAtTime(5.2, t)
-    vibDepth.gain.cancelScheduledValues(t)
-    vibDepth.gain.setValueAtTime(0, t)
-    vibDepth.gain.linearRampToValueAtTime(6, t + 0.5)
-    vibDepth.gain.linearRampToValueAtTime(14, t + 1.1)
-
-    amp.gain.cancelScheduledValues(t)
-    amp.gain.setValueAtTime(0, t)
-    amp.gain.linearRampToValueAtTime(0.95, t + 0.09)
-    amp.gain.linearRampToValueAtTime(0.8, t + dur * 0.6)
-    amp.gain.linearRampToValueAtTime(0, t + dur)
-
-    breath.gain.cancelScheduledValues(t)
-    breath.gain.setValueAtTime(0, t)
-    breath.gain.linearRampToValueAtTime(0.05, t + 0.1)
-    breath.gain.linearRampToValueAtTime(0, t + dur)
-  }
+  let onsetAt = -1
 
   return {
     get hz() {
       return hz
     },
-    setParams({ pitch }, t = ctx.currentTime) {
-      hz = 185 + 80 * pitch
-      if (t >= nextAt) {
-        howl(t, pitch)
-        nextAt = t + 2.6 + Math.random() * 0.6
+    setParams({ bright, voiced }, t = ctx.currentTime) {
+      if (voiced) {
+        if (onsetAt < 0) {
+          onsetAt = t
+          amp.gain.cancelScheduledValues(t)
+          amp.gain.setValueAtTime(0, t)
+          amp.gain.linearRampToValueAtTime(0.9, t + 0.06)
+          breath.gain.setValueAtTime(0.05, t)
+        }
+        // Wide open stretches the "aaawwww" out; a small opening is a short "aww".
+        const glide = 0.25 + 1.9 * bright
+        const u = Math.min(1, (t - onsetAt) / glide)
+        const f0 = 175 + 95 * bright
+        // rise into the howl, then sag away as the vowel rounds
+        const bend = u < 0.35 ? 0.9 + (0.42 * u) / 0.35 : 1.32 - 0.5 * ((u - 0.35) / 0.65)
+        saw.frequency.setTargetAtTime(f0 * bend, t, 0.05)
+        hz = f0 * bend
+        formants[0].frequency.setTargetAtTime(780 - 440 * u, t, 0.08)
+        formants[1].frequency.setTargetAtTime(1180 - 420 * u, t, 0.08)
+        vibDepth.gain.setTargetAtTime(5 + 12 * u, t, 0.2)
+        amp.gain.setTargetAtTime(0.85, t, 0.08)
+      } else if (onsetAt >= 0) {
+        onsetAt = -1
+        saw.frequency.setTargetAtTime(Hz9(hz), t, 0.06)
+        amp.gain.cancelScheduledValues(t)
+        amp.gain.setTargetAtTime(0, t, 0.09)
+        breath.gain.setTargetAtTime(0, t, 0.06)
       }
     },
     dispose() {
@@ -722,6 +714,11 @@ const createDogHowl: Instrument['create'] = (ctx, dest) => {
       vibrato.stop()
     },
   }
+}
+
+/** A little downward sag for the tail of a howl. */
+function Hz9(hz: number) {
+  return Math.max(70, hz * 0.72)
 }
 
 const NOTE: Record<string, number> = {
@@ -801,11 +798,11 @@ const petInstrument = (
   create: Instrument['create'],
   level: number,
   alwaysOn = false,
-): Instrument => ({ id, label, blurb, create, level, releaseMs: 200, alwaysOn })
+): Instrument => ({ id, label, blurb, create, level, releaseMs: 200, alwaysOn, gate: 0.06 })
 
 export const PET_INSTRUMENTS: Record<'cat' | 'dog' | 'baby', Instrument> = {
-  cat: petInstrument('pet-cat', 'Cat', 'midi miaw', createCatMeow, 0.38, true),
-  dog: petInstrument('pet-dog', 'Dog', 'awoooo', createDogHowl, 3.4, true),
+  cat: petInstrument('pet-cat', 'Cat', 'midi miaw', createCatMeow, 0.36),
+  dog: petInstrument('pet-dog', 'Dog', 'awoooo', createDogHowl, 3.4),
   baby: petInstrument('pet-baby', 'Tiny human', 'baby shark', createBabyShark, 1.6, true),
 }
 

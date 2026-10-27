@@ -160,10 +160,21 @@ Dogs are mostly reliable — a clear retriever scores 0.9, but a fluffy one can 
 (0.45) and a dog held by a person only scores 0.17. A detection has to hold for four frames to be
 trusted and stay gone for ten, so it does not flicker.
 
+**Pet sounds are the length of your mouth**, not loops. A quick opening gives a quick
+
+- **cat**: `niaw`
+- **dog**: `aww`
+
+and holding the mouth open stretches it out — `niaaaaaaaaaaw`, `aaawwwwwwwww`. The mouth is the
+gate, so closing it ends the sound with a downward "w" glide.
+
 The cat is a chiptune meow: a square wave whose pitch glide is **quantised to semitones and stepped**,
-the way an old sound chip would bend a note, over a nasal 1.9 kHz peak, in two syllables — "mi" then
-"aow". The dog is a single long howl that slides from "ah" to "oo" while the pitch rises and sags
-away, with vibrato creeping in as it goes.
+the way an old sound chip would bend a note, over a nasal 1.9 kHz peak. The wider the mouth, the
+slower the glide unfolds (0.22 s to 1.7 s). The dog is a howl that slides from "ah" to "oo" while
+the pitch rises and sags, with vibrato creeping in.
+
+Both use a **lower gate than the instruments** (0.06 against 0.22), because a barely-open mouth is
+exactly how you get a small "niaw".
 
 **Tiny humans are inferred, not detected.** There is no baby class in COCO, and face geometry does
 not separate them: eye separation over face height measures 0.51–0.70 for babies against 0.48–0.61
