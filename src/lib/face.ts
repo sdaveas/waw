@@ -89,6 +89,16 @@ export type FaceState = {
   heightRatio: number
   /** Eye separation over face height: the "big eyes" baby cue. */
   eyesOverFaceH: number
+  /** Landmarks the costumes hang off: nose, mouth corners, head outline. */
+  anchors: {
+    noseBase: { x: number; y: number }
+    mouthLeft: { x: number; y: number }
+    mouthRight: { x: number; y: number }
+    brow: { x: number; y: number }
+    chin: { x: number; y: number }
+    leftSide: { x: number; y: number }
+    rightSide: { x: number; y: number }
+  }
   /** Closed polygons in video pixel space. */
   oval: Array<{ x: number; y: number }>
   eyeOvals: [Array<{ x: number; y: number }>, Array<{ x: number; y: number }>]
@@ -179,6 +189,15 @@ export function readFace(
     ear,
     heightRatio: faceHeight / height,
     eyesOverFaceH: faceHeight > 1 ? eyesSpan / faceHeight : 0,
+    anchors: {
+      noseBase: px(2),
+      mouthLeft: px(CORNERS[0]),
+      mouthRight: px(CORNERS[1]),
+      brow: px(10),
+      chin: px(152),
+      leftSide: px(234),
+      rightSide: px(454),
+    },
     oval: OVAL_RING.map(px),
     eyeOvals: [EYE_RING_RIGHT.map(px), EYE_RING_LEFT.map(px)],
   }

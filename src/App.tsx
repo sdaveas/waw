@@ -10,6 +10,7 @@ import {
   stableOctave,
   type HandState,
 } from './lib/hands'
+import { COSTUME_NAME, drawCostume } from './lib/costume'
 import { detectPet, PetStabiliser, type PetKind } from './lib/pets'
 import { getHandLandmarker, getLandmarker, getObjectDetector } from './lib/tracker'
 
@@ -25,11 +26,7 @@ const HANDS_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints
 /** The object detector is a third model; it runs on a slower cadence. */
 const PET_EVERY = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 9 : 6
 
-const PET_DETAIL: Record<'cat' | 'dog' | 'baby', string> = {
-  cat: 'midi miaw',
-  dog: 'awoooo',
-  baby: 'baby shark',
-}
+const PET_DETAIL = COSTUME_NAME
 
 /** Phones get a smaller capture and a lighter model load. */
 const IS_TOUCH = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0
@@ -62,6 +59,10 @@ export default function App() {
   const frameCountRef = useRef(0)
   const objectDetectorRef = useRef<ObjectDetector | null>(null)
   const stabiliserRef = useRef(new PetStabiliser())
+  // The frame loop is a long-lived closure, so it cannot read React state for
+  // this: a state update re-renders, but the running rAF still sees the old
+  // value. The ref is what the renderer draws from.
+  const petRef = useRef<PetKind>(null)
   const lastHandsRef = useRef<HandState | null>(null)
   const mutedRef = useRef(false)
   const lastTsRef = useRef(0)
@@ -86,6 +87,7 @@ export default function App() {
     eyesRef.current = 0
     handPitchRef.current = 0
     octaveRef.current = 0
+    petRef.current = null
   }, [])
 
   useEffect(() => teardown, [teardown])
@@ -231,7 +233,7 @@ export default function App() {
             eyesOverFaceH: face?.eyesOverFaceH ?? 0,
           }),
         )
-        engineRef.current?.setPet(kind)
+        petRef.current = kind
         setPet(kind)
       } catch {
         /* pet detection is optional */
@@ -319,6 +321,9 @@ export default function App() {
       ctx.lineWidth = Math.max(2, (2 + 4 * open) * scale)
       ctx.stroke(mouthPath)
       ctx.restore()
+
+      // The costume goes on top, so it reads as being worn.
+      if (petRef.current) drawCostume(ctx, face, petRef.current, scale)
     }
 
     if (handState?.present) {

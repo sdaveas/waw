@@ -154,48 +154,34 @@ pluck, which is an auto-wah — it ignored the player. It is now a bandpass whos
 colours the note instead of gating it. Measured: energy centroid 705 Hz with the mouth shut, 2906
 Hz wide open, with level even to within 1.4×.
 
-### Pet mode
+### Pet mode: costumes
 
-Bring a cat or a dog to the camera and the instrument is replaced by that animal's voice: a
-**MIDI miaw** or an **awoooo**. The indicator sits under the mute button and lights up when one
-turns up. It is not a control; hover it and it says *bring your pet to unlock*, with the small print
-*[\*pets include tiny humans]*.
+Bring a cat, a dog or a baby to the camera and the face gets dressed up:
+
+| detected | you get |
+| --- | --- |
+| **cat** | a moustache, drawn under the nose from the subnasale landmark |
+| **dog** | floppy ears attached at the temples |
+| **tiny human** | a party hat with a brim and pom-pom, plus rosy cheeks |
+
+Everything is drawn from face landmarks in `src/lib/costume.ts`, so the props stick to the head and
+follow it as it moves. The indicator under the mute button lights up and names the costume; hover it
+and it says *bring your pet to unlock*, with the small print *[\*pets include tiny humans]*.
 
 Cats and dogs come from MediaPipe's COCO object detector. Cats are reliable (0.77–0.82 in testing).
 Dogs are mostly reliable — a clear retriever scores 0.9, but a fluffy one can come back as "bear"
 (0.45) and a dog held by a person only scores 0.17. A detection has to hold for four frames to be
-trusted and stay gone for ten, so it does not flicker.
-
-**Pet sounds are the length of your mouth**, not loops. A quick opening gives a quick
-
-- **cat**: `niaw`
-- **dog**: `aww`
-
-and holding the mouth open stretches it out — `niaaaaaaaaaaw`, `aaawwwwwwwww`. The mouth is the
-gate, so closing it ends the sound with a downward "w" glide.
-
-Both are **real recordings**, not synthesis — synthesised animal noises were not convincing:
-
-| sound | source | licence |
-| --- | --- | --- |
-| `public/audio/cat-meow.wav` | *Meow of a Siamese cat* (Wikimedia Commons) | CC0 |
-| `public/audio/dog-howl.wav` | *Jem howls* (Wikimedia Commons, by amethysta) | Public domain |
-
-They are still played like instruments rather than one-shots. The clip starts on the way in, then
-only its **sustain loops while the mouth stays open**, so a one-second meow can become
-"niaaaaaaaaw". Playback rate follows how wide the mouth is — a tight mouth plays it fast and high
-(short "niaw"), a wide one slow and low. If a sample fails to load, the voice falls back to the
-synthesised version rather than going silent.
-
-Both use a **lower gate than the instruments** (0.06 against 0.22), because a barely-open mouth is
-exactly how you get a small "niaw".
+trusted and stay gone for ten, so costumes do not flicker.
 
 **Tiny humans are inferred, not detected.** There is no baby class in COCO, and face geometry does
 not separate them: eye separation over face height measures 0.51–0.70 for babies against 0.48–0.61
 for adults, which overlaps badly. So the app looks for the cue that does hold — **a small face next
 to a big one**, i.e. somebody holding a baby up to the camera (ratio above 1.55), or a single face
-with unusually wide eyes. A baby on its own may therefore be missed. When it fires, baby shark
-plays as a loop rather than a mouth sound.
+with unusually wide eyes.
+
+The pet *sound* instruments (a recorded meow and howl, mouth-length) are still in the tree and
+parked, not wired up: `PET_INSTRUMENTS` in `src/lib/instruments.ts` and `public/audio`. Nothing
+calls `setPet` any more.
 
 ### Making the sound
 
