@@ -14,27 +14,63 @@ type Point = { x: number; y: number }
 
 const dist = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y)
 
-function moustache(ctx: CanvasRenderingContext2D, face: FaceState) {
-  const { noseBase, mouthLeft, mouthRight } = face.anchors
-  const mouthW = dist(mouthLeft, mouthRight)
-  const half = (mouthW * 0.95) / 2
-  const h = mouthW * 0.17
-  const cx = noseBase.x
-  // just under the nose, not down over the teeth
-  const cy = noseBase.y + h * 0.5
+/**
+ * Cat face: a little pink nose plus whiskers, rather than a human moustache.
+ * Whiskers are drawn twice — a soft dark stroke under a light one — so they
+ * stay visible on both pale and dark skin.
+ */
+function catFace(ctx: CanvasRenderingContext2D, face: FaceState, scale: number) {
+  const { noseTip } = face.anchors
+  const faceW = dist(face.anchors.leftSide, face.anchors.rightSide)
+  const noseW = faceW * 0.13
+  const noseH = noseW * 0.72
 
   ctx.save()
-  ctx.fillStyle = '#1a100b'
+
+  // nose: a rounded downward triangle
   ctx.beginPath()
-  // top edge: left tip, dip at the centre, right tip
-  ctx.moveTo(cx - half, cy - h * 0.9)
-  ctx.quadraticCurveTo(cx - half * 0.55, cy - h * 0.1, cx, cy - h * 0.25)
-  ctx.quadraticCurveTo(cx + half * 0.55, cy - h * 0.1, cx + half, cy - h * 0.9)
-  // bottom edge: sweep back under the lobes
-  ctx.quadraticCurveTo(cx + half * 0.6, cy + h * 1.0, cx, cy + h * 0.55)
-  ctx.quadraticCurveTo(cx - half * 0.6, cy + h * 1.0, cx - half, cy - h * 0.9)
+  ctx.moveTo(noseTip.x - noseW / 2, noseTip.y - noseH * 0.45)
+  ctx.quadraticCurveTo(noseTip.x, noseTip.y - noseH * 0.7, noseTip.x + noseW / 2, noseTip.y - noseH * 0.45)
+  ctx.quadraticCurveTo(noseTip.x + noseW * 0.22, noseTip.y + noseH * 0.55, noseTip.x, noseTip.y + noseH * 0.62)
+  ctx.quadraticCurveTo(noseTip.x - noseW * 0.22, noseTip.y + noseH * 0.55, noseTip.x - noseW / 2, noseTip.y - noseH * 0.45)
   ctx.closePath()
+  ctx.fillStyle = '#f472b6'
   ctx.fill()
+  ctx.strokeStyle = 'rgba(60,20,40,0.5)'
+  ctx.lineWidth = Math.max(1, 1.5 * scale)
+  ctx.stroke()
+
+  // whiskers: three a side, fanned out and slightly drooping
+  const origin = { x: noseTip.x, y: noseTip.y + noseH * 0.15 }
+  const len = faceW * 0.48
+  for (const dir of [-1, 1]) {
+    for (const [i, spec] of [
+      { up: -0.46, len: 0.86, sag: 0.10 },
+      { up: -0.06, len: 1.02, sag: 0.05 },
+      { up: 0.34, len: 0.9, sag: -0.05 },
+    ].entries()) {
+      const x0 = origin.x + dir * noseW * 0.45
+      const y0 = origin.y + spec.up * noseW * 0.5
+      const x1 = x0 + dir * len * spec.len
+      const y1 = y0 + len * spec.up * 0.55
+      const cx = x0 + dir * len * 0.55
+      const cy = y0 + len * spec.sag * 2.2
+
+      for (const [width, color] of [
+        [Math.max(3, 5.2 * scale), 'rgba(30,20,25,0.42)'],
+        [Math.max(1.4, 2.4 * scale), 'rgba(255,255,255,0.95)'],
+      ] as Array<[number, string]>) {
+        ctx.beginPath()
+        ctx.moveTo(x0, y0)
+        ctx.quadraticCurveTo(cx, cy, x1, y1)
+        ctx.strokeStyle = color
+        ctx.lineWidth = width
+        ctx.lineCap = 'round'
+        ctx.stroke()
+      }
+      void i
+    }
+  }
   ctx.restore()
 }
 
@@ -139,14 +175,14 @@ export function drawCostume(
   pet: PetKind,
   scale: number,
 ) {
-  if (pet === 'cat') moustache(ctx, face)
+  if (pet === 'cat') catFace(ctx, face, scale)
   else if (pet === 'dog') ears(ctx, face, scale)
   else if (pet === 'baby') partyHat(ctx, face, scale)
 }
 
 /** One-line description for the indicator. */
 export const COSTUME_NAME: Record<'cat' | 'dog' | 'baby', string> = {
-  cat: 'moustache',
+  cat: 'whiskers',
   dog: 'ears',
   baby: 'party hat',
 }

@@ -160,12 +160,13 @@ Bring a cat, a dog or a baby to the camera and the face gets dressed up:
 
 | detected | you get |
 | --- | --- |
-| **cat** | a moustache, drawn under the nose from the subnasale landmark |
+| **cat** | a pink cat nose and six whiskers, fanned from the nose tip |
 | **dog** | floppy ears attached at the temples |
 | **tiny human** | a party hat with a brim and pom-pom, plus rosy cheeks |
 
 Everything is drawn from face landmarks in `src/lib/costume.ts`, so the props stick to the head and
-follow it as it moves. The indicator under the mute button lights up and names the costume; hover it
+follow it as it moves. The whiskers are stroked twice — a soft dark line under a light one — so they
+stay visible on both pale and dark skin. The indicator under the mute button lights up and names the costume; hover it
 and it says *bring your pet to unlock*, with the small print *[\*pets include tiny humans]*.
 
 Cats and dogs come from MediaPipe's COCO object detector. Cats are reliable (0.77–0.82 in testing).

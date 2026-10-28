@@ -91,6 +91,7 @@ export type FaceState = {
   eyesOverFaceH: number
   /** Landmarks the costumes hang off: nose, mouth corners, head outline. */
   anchors: {
+    noseTip: { x: number; y: number }
     noseBase: { x: number; y: number }
     mouthLeft: { x: number; y: number }
     mouthRight: { x: number; y: number }
@@ -190,6 +191,7 @@ export function readFace(
     heightRatio: faceHeight / height,
     eyesOverFaceH: faceHeight > 1 ? eyesSpan / faceHeight : 0,
     anchors: {
+      noseTip: px(4),
       noseBase: px(2),
       mouthLeft: px(CORNERS[0]),
       mouthRight: px(CORNERS[1]),
