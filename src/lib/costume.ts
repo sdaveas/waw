@@ -15,63 +15,35 @@ type Point = { x: number; y: number }
 const dist = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y)
 
 /**
- * Cat face: a little pink nose plus whiskers, rather than a human moustache.
- * Whiskers are drawn twice — a soft dark stroke under a light one — so they
- * stay visible on both pale and dark skin.
+ * Cat: a sticker, not strokes. Thin canvas lines read as harsh and hand-drawn,
+ * so the whiskers and nose are a single transparent PNG (supersampled, tapered,
+ * soft-edged) positioned on the nose tip and scaled to the face.
  */
-function catFace(ctx: CanvasRenderingContext2D, face: FaceState, scale: number) {
-  const { noseTip } = face.anchors
-  const faceW = dist(face.anchors.leftSide, face.anchors.rightSide)
-  const noseW = faceW * 0.13
-  const noseH = noseW * 0.72
+const stickerCache = new Map<string, HTMLImageElement>()
 
-  ctx.save()
-
-  // nose: a rounded downward triangle
-  ctx.beginPath()
-  ctx.moveTo(noseTip.x - noseW / 2, noseTip.y - noseH * 0.45)
-  ctx.quadraticCurveTo(noseTip.x, noseTip.y - noseH * 0.7, noseTip.x + noseW / 2, noseTip.y - noseH * 0.45)
-  ctx.quadraticCurveTo(noseTip.x + noseW * 0.22, noseTip.y + noseH * 0.55, noseTip.x, noseTip.y + noseH * 0.62)
-  ctx.quadraticCurveTo(noseTip.x - noseW * 0.22, noseTip.y + noseH * 0.55, noseTip.x - noseW / 2, noseTip.y - noseH * 0.45)
-  ctx.closePath()
-  ctx.fillStyle = '#f472b6'
-  ctx.fill()
-  ctx.strokeStyle = 'rgba(60,20,40,0.5)'
-  ctx.lineWidth = Math.max(1, 1.5 * scale)
-  ctx.stroke()
-
-  // whiskers: three a side, fanned out and slightly drooping
-  const origin = { x: noseTip.x, y: noseTip.y + noseH * 0.15 }
-  const len = faceW * 0.48
-  for (const dir of [-1, 1]) {
-    for (const [i, spec] of [
-      { up: -0.46, len: 0.86, sag: 0.10 },
-      { up: -0.06, len: 1.02, sag: 0.05 },
-      { up: 0.34, len: 0.9, sag: -0.05 },
-    ].entries()) {
-      const x0 = origin.x + dir * noseW * 0.45
-      const y0 = origin.y + spec.up * noseW * 0.5
-      const x1 = x0 + dir * len * spec.len
-      const y1 = y0 + len * spec.up * 0.55
-      const cx = x0 + dir * len * 0.55
-      const cy = y0 + len * spec.sag * 2.2
-
-      for (const [width, color] of [
-        [Math.max(3, 5.2 * scale), 'rgba(30,20,25,0.42)'],
-        [Math.max(1.4, 2.4 * scale), 'rgba(255,255,255,0.95)'],
-      ] as Array<[number, string]>) {
-        ctx.beginPath()
-        ctx.moveTo(x0, y0)
-        ctx.quadraticCurveTo(cx, cy, x1, y1)
-        ctx.strokeStyle = color
-        ctx.lineWidth = width
-        ctx.lineCap = 'round'
-        ctx.stroke()
-      }
-      void i
-    }
+function sticker(file: string) {
+  let img = stickerCache.get(file)
+  if (!img) {
+    img = new Image()
+    img.src = `${import.meta.env.BASE_URL}stickers/${file}`
+    stickerCache.set(file, img)
   }
-  ctx.restore()
+  return img
+}
+
+/** Where the nose sits inside the sticker, as a fraction of its box. */
+const STICKER_NOSE = { x: 0.5, y: 0.52 }
+
+function catFace(ctx: CanvasRenderingContext2D, face: FaceState) {
+  const img = sticker('cat-whiskers.png')
+  if (!img.complete || img.naturalWidth === 0) return
+
+  const faceW = dist(face.anchors.leftSide, face.anchors.rightSide)
+  const w = faceW * 1.2
+  const hgt = w * (img.naturalHeight / img.naturalWidth)
+  const x = face.anchors.noseTip.x - w * STICKER_NOSE.x
+  const y = face.anchors.noseTip.y - hgt * STICKER_NOSE.y
+  ctx.drawImage(img, x, y, w, hgt)
 }
 
 function ears(ctx: CanvasRenderingContext2D, face: FaceState, scale: number) {
@@ -175,7 +147,7 @@ export function drawCostume(
   pet: PetKind,
   scale: number,
 ) {
-  if (pet === 'cat') catFace(ctx, face, scale)
+  if (pet === 'cat') catFace(ctx, face)
   else if (pet === 'dog') ears(ctx, face, scale)
   else if (pet === 'baby') partyHat(ctx, face, scale)
 }
